@@ -44,6 +44,11 @@ body.light .study-setup{background:linear-gradient(135deg,#fff,#f6f9f1);border-c
 .salary-estimate-foot { display: flex; justify-content: space-between; gap: 16px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 @media (max-width: 760px) { .salary-estimate-form { grid-template-columns: 1fr; } .salary-estimate-foot { flex-direction: column; } }
 
+/* Quiet logo-only startup screen */
+.boot-screen{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;background:#101310;opacity:1;visibility:visible;transition:opacity .28s ease,visibility .28s ease}.boot-screen.is-ready{opacity:0;visibility:hidden;pointer-events:none}.boot-logo{position:relative;width:76px;height:76px;border-radius:23px;background:var(--lime);color:#17200c;box-shadow:0 0 0 1px #d9ff8b44,0 15px 54px #c7f36b28;animation:boot-breathe 1.05s ease-in-out infinite}.boot-logo svg{width:58px;height:58px;animation:boot-mark 1.7s cubic-bezier(.55,.05,.35,1) infinite;transform-origin:50% 50%}.boot-logo:before,.boot-logo:after{content:"";position:absolute;inset:-9px;border:1px solid #c7f36b30;border-radius:29px;animation:boot-ring 2.1s ease-out infinite}.boot-logo:after{animation-delay:1.05s}@keyframes boot-breathe{0%,100%{transform:scale(.94);box-shadow:0 0 0 1px #d9ff8b44,0 15px 44px #c7f36b1a}50%{transform:scale(1);box-shadow:0 0 0 1px #d9ff8b66,0 15px 60px #c7f36b38}}@keyframes boot-mark{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}@keyframes boot-ring{0%{transform:scale(.88);opacity:.8}100%{transform:scale(1.38);opacity:0}}.rent-chart-empty{align-items:center;justify-content:center}.rent-empty-state{max-width:360px;padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);color:var(--muted);font-size:12px;line-height:1.7;text-align:center}.rent-empty-state b{display:block;margin-bottom:5px;color:var(--text);font:600 13px Manrope,sans-serif}
+@media(prefers-reduced-motion:reduce){.boot-logo,.boot-logo svg,.boot-logo:before,.boot-logo:after{animation:none}.boot-screen{transition:none}}
+@media(max-width:620px){.coverage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.coverage-item{min-width:0}.coverage-top{flex-wrap:wrap}.source-list{grid-template-columns:1fr}}
+
 /* SpotWise visual system: clearer type, layered surfaces, and calmer motion. */
 :root {
   --lime: #c5f16b;

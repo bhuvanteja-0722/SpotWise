@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -24,6 +25,53 @@ CATEGORY_LABELS = {
     "cost_of_living": "Cost of living",
     "rent": "Commercial rent input",
 }
+BUSINESS_TYPE_CATEGORIES = {
+    "cafe / restaurant": {
+        "restaurant", "cafe", "coffee shop", "casual eatery", "fast food restaurant",
+        "food service", "non alcoholic beverage venue", "smoothie juice bar", "bar",
+    },
+    "retail shop": {
+        "shopping", "specialty store", "department store", "fashion and apparel store",
+        "electronics store", "hardware home and garden store", "office supply store",
+        "sporting goods store", "musical instrument and pro audio store", "toys and games store",
+        "animal and pet store", "flowers and gifts store", "second hand store", "books music and video store",
+    },
+    "bakery / dessert shop": {"bakery", "dessert shop", "confectionery", "pastry shop", "cake shop"},
+    "grocery / convenience store": {"grocery store", "supermarket", "convenience store", "food and beverage store", "market"},
+    "clothing / fashion retail": {"fashion and apparel store", "clothing store", "fashion store"},
+    "pharmacy": {"pharmacy", "pharmacy and drug store"},
+    "salon / wellness": {"personal or beauty service", "personal care and beauty store", "wellness service", "spa", "salon"},
+    "fitness studio": {"fitness studio", "gym", "sport or fitness facility", "sport or recreation club"},
+    "healthcare clinic": {"health care", "medical service", "clinic", "hospital", "outpatient care facility", "dental clinic", "walk in clinic"},
+    "tutoring / education center": {"tutoring service", "educational service", "place of learning", "specialty school"},
+    "electronics shop": {"electronics store", "electronics shop"},
+    "home goods / furniture": {"hardware home and garden store", "furniture store", "home goods store"},
+    "pet care / veterinary": {"animal or pet service", "veterinary service", "animal and pet store"},
+    "coworking space": {"coworking space", "corporate or business office"},
+    "hotel / guesthouse": {"hotel", "lodging", "resort", "bed and breakfast", "private lodging"},
+}
+
+
+def _normalize_category(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def _matching_competitors(rows: list[Observation], business_type: str) -> tuple[list[Observation], str | None]:
+    competitors = [row for row in rows if row.category == "competition"]
+    if not competitors:
+        return rows, None
+    labeled = [row for row in competitors if row.detail]
+    if not labeled:
+        return [row for row in rows if row.category != "competition"], "Competitor rows have no business categories, so they were excluded from type-specific competition scoring."
+    selected = _normalize_category(business_type)
+    aliases = next((values for name, values in BUSINESS_TYPE_CATEGORIES.items() if _normalize_category(name) == selected), {selected})
+    normalized_aliases = {_normalize_category(value) for value in aliases}
+    matched = [row for row in labeled if _normalize_category(row.detail or "") in normalized_aliases]
+    filtered_rows = [row for row in rows if row.category != "competition"] + matched
+    if matched:
+        warning = "Uncategorized competitor rows were excluded from type-specific competition scoring." if len(labeled) < len(competitors) else None
+        return filtered_rows, warning
+    return filtered_rows, f"No categorized competitor listings match {business_type}; competition was not scored for this selection."
 
 
 def load_analysis() -> dict:
@@ -64,6 +112,7 @@ def summarize_signals(
     radius_km: float | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
+    business_type: str | None = None,
 ) -> dict:
     query = select(Observation).where(func.lower(Observation.city) == city.casefold())
     has_geo_radius = radius_km is not None and latitude is not None and longitude is not None
@@ -86,6 +135,10 @@ def summarize_signals(
             if distance <= radius_km:
                 selected.append((row, distance))
         rows = [pair[0] for pair in selected]
+
+    competitor_warning = None
+    if business_type:
+        rows, competitor_warning = _matching_competitors(rows, business_type)
 
     grouped: dict[str, list[Observation]] = defaultdict(list)
     by_category: dict[str, Counter] = defaultdict(Counter)
@@ -128,6 +181,9 @@ def summarize_signals(
     batch_ids = sorted({row.batch_id for row in rows})
     batches = list(session.scalars(select(SignalBatch).where(SignalBatch.id.in_(batch_ids)))) if batch_ids else []
     source_counts = Counter(row.category for row in rows)
+    warnings = _scope_warnings(area, radius_km, latitude, longitude, unlocated)
+    if competitor_warning:
+        warnings.append(competitor_warning)
     return {
         "city": city,
         "area": area,
@@ -138,7 +194,7 @@ def summarize_signals(
         "nearest_transit_distance_km": round(nearest_transit, 3) if nearest_transit is not None else None,
         "sources": [{"id": batch.id, "name": batch.name, "category": batch.category, "row_count": batch.row_count} for batch in batches],
         "available_categories": sorted(source_counts),
-        "warnings": _scope_warnings(area, radius_km, latitude, longitude, unlocated),
+        "warnings": warnings,
     }
 
 
@@ -194,7 +250,7 @@ def break_even(assumptions: dict) -> dict:
 def score_study(session: Session, study: Study, data: dict) -> dict:
     assumptions = json.loads(study.assumptions_json or "{}")
     weights = json.loads(study.weights_json or "{}")
-    signals = summarize_signals(session, study.city, study.area, study.radius_km, study.latitude, study.longitude)
+    signals = summarize_signals(session, study.city, study.area, study.radius_km, study.latitude, study.longitude, study.business_type)
     scores: dict[str, dict] = {}
 
     rent = assumptions.get("monthly_rent")
