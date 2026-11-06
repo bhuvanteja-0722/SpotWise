@@ -52,7 +52,7 @@ The backend uses FastAPI with SQLAlchemy and SQLite by default. FastAPI document
 
 ## Import your own local datasets
 
-Use the Data & methods section in the website, or send a multipart request to `POST /api/v1/datasets/import`. Select a signal category and include a CSV. The application stores normalized rows in SQLite and does not retain the original uploaded file. Current limits are 20 MB and 100,000 rows per upload.
+Use the Data & methods section in the website, or send a multipart request to `POST /api/v1/datasets/import`. Select a signal category and include a CSV. Before saving, the website scans the file and previews sample rows, the usable/invalid/duplicate counts, coordinate and timestamp coverage, and common input issues. The backend rechecks every row, skips invalid rows, can remove exact duplicates, and can normalize repeated whitespace in city/area names. The application stores normalized rows in SQLite and does not retain the original uploaded file. Current limits are 20 MB and 100,000 rows per upload.
 
 Download the [CSV template](data/import-template.csv). Required columns are `city` and numeric `value`. Optional columns are:
 
@@ -61,6 +61,8 @@ area, observed_at, metric, unit, name, category_label, latitude, longitude
 ```
 
 `observed_at` should be an ISO date or datetime. Coordinates must be WGS84 latitude/longitude decimals. Coordinates enable straight-line radius filtering and nearest-stop calculations; they do not represent walking distance or travel time.
+
+The upload scan checks UTF-8 CSVs, recognizes comma/semicolon/tab/pipe separators, maps common header aliases, validates numeric values, date/time strings, and coordinate pairs, and reports exact duplicate records. It does not silently remove unusual high/low values: review the reported range and source units before importing. Exact-row de-duplication is optional because repeated measurements can be valid when the timestamp or location differs.
 
 Recommended metric labels:
 
@@ -120,5 +122,23 @@ python3 scripts/build_analysis.py \
 ## Scope and deployment notes
 
 The static Kaggle sources do not contain live footfall, current competitor locations, traffic, parking occupancy, current metro/bus access, or neighborhood-level workforce availability. Import appropriately licensed datasets to analyze those dimensions; external maps/mobility API credentials are not required for local operation. No API key is bundled.
+
+## Recommended dataset expansion
+
+These are candidate sources to inspect and preprocess; they are not presented as verified current truth. Check the dataset card, license, collection date, source terms, geographic precision, and redistribution rights before downloading or publishing derived data.
+
+| Priority | Source | Useful fields | Fit and limitation |
+| --- | --- | --- | --- |
+| 1 | [Indian Business Listings Dataset](https://www.kaggle.com/datasets/japnoor69/indian-business-listings-dataset) | Business name, category, city, address, created date | Potential competitor counts across Indian cities. The data card notes duplicates and missing contact fields; verify coordinate availability and freshness before using for neighborhood scores. |
+| 2 | [Swiggy restaurants dataset](https://www.kaggle.com/datasets/rrkcoder/swiggy-restaurants-dataset) | Restaurant category, area, price, ratings, location fields | A larger restaurant-sector competitor/price snapshot (reported around 150k listings). It is scraped and limited to one platform; validate its license and service terms, and never treat it as total market share. |
+| 3 | [India PCA / socio-economic data](https://www.kaggle.com/datasets/webaccess/india-pca-data) | Population, housing, education and demographic measures | Adds demographic context but is based on 2001/2011 census data, district-level, and its Kaggle card lists no license. Keep it historical/context-only unless rights and geography are verified. |
+| 4 | [Foot Traffic Würzburg retail forecasting data](https://www.kaggle.com/competitions/foot-traffic-wuerzburg-retail-forecasting-2-0/data) | Hourly pedestrian counters, weather, holidays and events | Excellent for demonstrating time-series/peak-hour preprocessing, but it is a German city and must never be joined into Indian location scores. Review competition rules before reuse. |
+| Mobility | [Delhi Open Transit Data](https://otd.delhi.gov.in/documentation/) · [Chennai CUMTA open data](https://opendata.cumta.org/) | GTFS stops, routes, schedules | Better city transit evidence than the historical 2015 rail snapshot. Feed availability and real-time access differ by city; Delhi documents that its published bus schedule times are rough estimates. |
+
+For a credible location score, prioritize recent, geocoded, local commercial listings/leases; a category-tagged POI/business dataset; official GTFS feeds; and licensed anonymized footfall or road-speed data. A large dataset is not automatically a better dataset: stale, synthetic, platform-scraped, coarse-geography, or mismatched-city rows can bias the result. The current importer supports CSV signals; use the template and the upload scan before importing new sources.
+
+### API recommendation
+
+APIs would improve specific missing signals, but require source-specific integration and usage limits. Google Places is a practical paid option for nearby competitors/POIs and coordinates; Google Maps Platform publishes India-specific pricing and free monthly thresholds, and nearby search can become billable. For transit, use official city GTFS feeds first. OpenStreetMap can add open POI/road context, but do not depend on the community Overpass endpoint for large repeated production queries; use a licensed regional extract or host the data yourself. Footfall is the hardest gap: it generally needs licensed mobility data or a local authority/field-count dataset, not a normal maps API. Keep API keys server-side in environment variables and cache permitted results. See [Google India pricing](https://developers.google.com/maps/billing-and-pricing/india), [Delhi GTFS docs](https://otd.delhi.gov.in/documentation/), and the [OpenStreetMap service policies](https://operations.osmfoundation.org/policies/).
 
 This repository is set up for local development and a single-user academic project. It does not include user authentication, account isolation, deployment secrets, managed backups, or production migrations. Do not expose the local server to a public network with private datasets. Before a public multi-user deployment, add authentication, authorization, a production database, backup/retention policy, and review each source’s redistribution rights.

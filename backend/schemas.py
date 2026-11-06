@@ -69,3 +69,11 @@ class DatasetImportResult(BaseModel):
     row_count: int
     imported_at: str
     warnings: list[str] = Field(default_factory=list)
+    scanned_rows: int = 0
+    skipped_invalid_rows: int = 0
+    duplicates_removed: int = 0
+    geocoded_rows: int = 0
+    timestamped_rows: int = 0
+    minimum_value: float | None = None
+    median_value: float | None = None
+    maximum_value: float | None = None

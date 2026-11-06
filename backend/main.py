@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -111,16 +112,50 @@ def health(session: Session = Depends(get_session)):
 
 
 @app.get("/api/v1/markets", tags=["analysis"])
-def markets(data: dict = Depends(get_data)):
+def markets(session: Session = Depends(get_session), data: dict = Depends(get_data)):
+    default_businesses = [
+        "Cafe / restaurant", "Retail shop", "Bakery / dessert shop", "Grocery / convenience store",
+        "Clothing / fashion retail", "Pharmacy", "Salon / wellness", "Fitness studio",
+        "Healthcare clinic", "Tutoring / education center", "Electronics shop",
+        "Home goods / furniture", "Pet care / veterinary", "Coworking space",
+        "Hotel / guesthouse", "Repair / local service", "Other local service",
+    ]
+    uploaded_markets = set(session.scalars(select(Observation.city).distinct()))
+    imported_businesses = sorted({
+        value.strip() for value in session.scalars(
+            select(Observation.detail).where(Observation.category == "competition", Observation.detail.is_not(None))
+        ) if value and value.strip()
+    }, key=str.casefold)
+    jobs = data.get("jobs", {}).get("cities", [])
+    rail = data.get("rail", {}).get("cities", [])
+    market_names = {item["name"] for item in jobs} | uploaded_markets
+    coverage = []
+    for city in sorted(market_names, key=str.casefold):
+        signals = []
+        if any(item["name"].casefold() == city.casefold() for item in jobs):
+            signals.append("city-level jobs")
+        if any(item["name"].casefold() == city.casefold() for item in rail):
+            signals.append("2015 rail")
+        if city.casefold() == "mumbai":
+            signals.append("Mumbai-only residential rent")
+        local_categories = sorted(set(session.scalars(
+            select(Observation.category).where(func.lower(Observation.city) == city.casefold())
+        )))
+        if local_categories:
+            signals.append(f"{len(local_categories)} imported local signal(s)")
+        coverage.append({"city": city, "signals": signals or ["user-uploaded data only"]})
     return {
-        "markets": [item["name"] for item in data.get("jobs", {}).get("cities", [])],
-        "business_types": ["Cafe / restaurant", "Retail shop", "Salon / wellness", "Fitness studio", "Other local service"],
+        "markets": sorted(market_names, key=str.casefold),
+        "market_coverage": coverage,
+        "business_types": default_businesses + [item for item in imported_businesses if item.casefold() not in {name.casefold() for name in default_businesses}],
+        "dataset_business_types": imported_businesses,
     }
 
 
 @app.get("/api/v1/areas", tags=["analysis"])
 def areas(city: str = Query(min_length=2, max_length=90), session: Session = Depends(get_session), data: dict = Depends(get_data)):
     values = set(session.scalars(select(Observation.area).where(func.lower(Observation.city) == city.casefold(), Observation.area != "Citywide")))
+    values.update(session.scalars(select(Study.area).where(func.lower(Study.city) == city.casefold(), Study.area.is_not(None))))
     if city.casefold() == "mumbai":
         values.update(item["name"] for item in data.get("rentals", {}).get("localities", []))
     return {"city": city, "areas": sorted(values, key=str.casefold)}
@@ -169,6 +204,8 @@ async def import_dataset(
     category: str = Form(...),
     name: str = Form(..., min_length=2, max_length=120),
     source: str = Form(default="User supplied CSV", max_length=240),
+    skip_duplicates: bool = Form(default=True),
+    normalize_labels: bool = Form(default=True),
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ):
@@ -187,7 +224,11 @@ async def import_dataset(
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=415, detail="The CSV must use UTF-8 encoding.") from exc
 
-    reader = csv.DictReader(io.StringIO(text))
+    try:
+        dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
     if not reader.fieldnames:
         raise HTTPException(status_code=422, detail="The CSV needs a header row.")
     normalized_headers = {_normalise_header(header) for header in reader.fieldnames}
@@ -196,15 +237,23 @@ async def import_dataset(
 
     observations: list[Observation] = []
     errors: list[str] = []
+    seen_rows: set[tuple] = set()
+    duplicate_rows = 0
+    raw_rows = 0
     for line_number, row in enumerate(reader, start=2):
         if line_number - 1 > MAX_UPLOAD_ROWS:
             raise HTTPException(status_code=413, detail=f"The CSV exceeds the {MAX_UPLOAD_ROWS:,} row limit.")
-        city = _value(row, "city", "market", "city_name")
+        raw_rows += 1
+        if None in row:
+            errors.append(f"Line {line_number}: row has more columns than the header")
+            continue
+        tidy = lambda value: re.sub(r"\s+", " ", value).strip() if normalize_labels else value.strip()
+        city = tidy(_value(row, "city", "market", "city_name"))
         if not city:
             errors.append(f"Line {line_number}: city is required")
             continue
-        area = _value(row, "area", "locality", "neighborhood", "neighbourhood", "district") or "Citywide"
-        metric = _value(row, "metric", "measure", "field", "signal") or category
+        area = tidy(_value(row, "area", "locality", "neighborhood", "neighbourhood", "district")) or "Citywide"
+        metric = tidy(_value(row, "metric", "measure", "field", "signal") or category)
         raw_value = _value(row, "value", "count", "amount", "visitors", "vehicles", "speed", "available_spaces", "salary", "rent", "cost")
         if not raw_value and category in {"competition", "transit"}:
             raw_value = "1"
@@ -227,11 +276,21 @@ async def import_dataset(
         except ValueError as exc:
             errors.append(str(exc))
             continue
-        detail = _value(row, "business_type", "category_label", "mode", "kind", "type", "competitor_type")[:100] or None
+        detail = tidy(_value(row, "business_type", "category_label", "mode", "kind", "type", "competitor_type"))[:100] or None
+        unit = tidy(_value(row, "unit", "units", "measurement_unit") or "count")[:40]
+        observation_name = tidy(_value(row, "name", "business_name", "station_name", "label"))[:180] or None
+        duplicate_key = (
+            city.casefold(), area.casefold(), category, metric.casefold(), numeric_value, unit.casefold(),
+            observation_name.casefold() if observation_name else None, detail.casefold() if detail else None,
+            observed_at.isoformat() if observed_at else None, latitude, longitude,
+        )
+        if skip_duplicates and duplicate_key in seen_rows:
+            duplicate_rows += 1
+            continue
+        seen_rows.add(duplicate_key)
         observations.append(Observation(
             city=city[:90], area=area[:120], category=category, metric=metric[:80], value=numeric_value,
-            unit=(_value(row, "unit", "units", "measurement_unit") or "count")[:40],
-            name=(_value(row, "name", "business_name", "station_name", "label") or "")[:180] or None,
+            unit=unit, name=observation_name,
             detail=detail, observed_at=observed_at, latitude=latitude, longitude=longitude,
             metadata_json="{}",
         ))
@@ -248,8 +307,20 @@ async def import_dataset(
     session.commit()
     session.refresh(batch)
     warnings = [f"{len(errors):,} invalid row(s) were skipped; first issue: {errors[0]}."] if errors else []
-    warnings.append("Imported CSV rows are normalized into the local database; the original file is not retained.")
-    return DatasetImportResult(id=batch.id, name=batch.name, category=batch.category, row_count=batch.row_count, imported_at=batch.imported_at.isoformat() + "Z", warnings=warnings)
+    if duplicate_rows:
+        warnings.append(f"{duplicate_rows:,} exact duplicate row(s) were removed.")
+    warnings.append("Rows were validated and normalized into the local database; the original file is not retained.")
+    values = sorted(item.value for item in observations)
+    middle = len(values) // 2
+    median = values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
+    return DatasetImportResult(
+        id=batch.id, name=batch.name, category=batch.category, row_count=batch.row_count,
+        imported_at=batch.imported_at.isoformat() + "Z", warnings=warnings, scanned_rows=raw_rows,
+        skipped_invalid_rows=len(errors), duplicates_removed=duplicate_rows,
+        geocoded_rows=sum(item.latitude is not None for item in observations),
+        timestamped_rows=sum(item.observed_at is not None for item in observations),
+        minimum_value=values[0], median_value=median, maximum_value=values[-1],
+    )
 
 
 @app.delete("/api/v1/data-sources/{batch_id}", tags=["datasets"])
