@@ -67,8 +67,13 @@
       });
       $('#areaSelect').addEventListener('change', () => { clearActiveStudy(); updateSelectionSummary(); refreshDashboard(); });
       $('#areaSelect').addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') { event.preventDefault(); clearActiveStudy(); updateSelectionSummary(); refreshDashboard(); }
+        if (event.key === 'ArrowDown' && state.areas.length) { event.preventDefault(); showAreaSuggestions(); $('#areaSuggestions button')?.focus(); return; }
+        if (event.key === 'Enter') { event.preventDefault(); hideAreaSuggestions(); clearActiveStudy(); updateSelectionSummary(); refreshDashboard(); }
+        if (event.key === 'Escape') hideAreaSuggestions();
       });
+      $('#areaSelect').addEventListener('input', () => { clearActiveStudy(); renderAreaSuggestions(); updateSelectionSummary(); });
+      $('#areaSelect').addEventListener('focus', showAreaSuggestions);
+      $('#areaSelect').addEventListener('blur', () => setTimeout(hideAreaSuggestions, 120));
       $('#businessSelect').addEventListener('change', () => { clearActiveStudy(); updateSelectionSummary(); updateWorkforce(); });
       await Promise.all([refreshAreas(), refreshDashboard(), refreshStudies(), refreshSources(), refreshCoverage()]);
       initialiseScenario();
@@ -118,9 +123,45 @@
     const current = $('#areaSelect').value.trim();
     const result = await api(`/api/v1/areas?city=${encodeURIComponent(city)}`);
     state.areas = result.areas;
-    $('#areaSuggestions').innerHTML = result.areas.map((area) => `<option value="${escapeHtml(area)}"></option>`).join('');
+    renderAreaSuggestions();
     $('#areaSelect').value = current;
+    hideAreaSuggestions();
     updateSelectionSummary();
+  }
+
+  function renderAreaSuggestions() {
+    const query = $('#areaSelect').value.trim().toLocaleLowerCase();
+    const matches = state.areas.filter((area) => !query || area.toLocaleLowerCase().includes(query)).slice(0, 10);
+    const list = $('#areaSuggestions');
+    list.innerHTML = matches.length
+      ? matches.map((area) => `<button type="button" role="option" aria-selected="false" data-area="${escapeHtml(area)}">${escapeHtml(area)}</button>`).join('')
+      : `<div class="area-no-results">${state.areas.length ? 'No matching neighborhood. Press Enter to use your own area.' : `No preset areas for ${escapeHtml($('#citySelect').value)}. Type an area and press Enter.`}</div>`;
+    list.querySelectorAll('button[data-area]').forEach((button) => {
+      button.addEventListener('mousedown', (event) => event.preventDefault());
+      button.addEventListener('click', () => {
+        $('#areaSelect').value = button.dataset.area;
+        hideAreaSuggestions();
+        clearActiveStudy();
+        updateSelectionSummary();
+        refreshDashboard();
+      });
+      button.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown') { event.preventDefault(); button.nextElementSibling?.focus(); }
+        if (event.key === 'ArrowUp') { event.preventDefault(); (button.previousElementSibling?.matches('button') ? button.previousElementSibling : $('#areaSelect')).focus(); }
+        if (event.key === 'Escape') { hideAreaSuggestions(); $('#areaSelect').focus(); }
+      });
+    });
+  }
+
+  function showAreaSuggestions() {
+    renderAreaSuggestions();
+    $('#areaSuggestions').hidden = false;
+    $('#areaSelect').setAttribute('aria-expanded', 'true');
+  }
+
+  function hideAreaSuggestions() {
+    $('#areaSuggestions').hidden = true;
+    $('#areaSelect').setAttribute('aria-expanded', 'false');
   }
 
   async function refreshDashboard() {
