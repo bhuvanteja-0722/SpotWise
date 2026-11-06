@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import csv
-import io
 import json
-import math
 import os
-import re
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
@@ -16,9 +11,11 @@ from sqlalchemy import delete, event, func, select
 from sqlalchemy.orm import Session
 
 from .analytics import break_even, load_analysis, market_context, score_study, serialize_study, summarize_signals
+from .dataset_import import normalize_rows, read_rows
 from .db import Base, ROOT, engine, get_session
 from .models import Observation, SignalBatch, Study, utc_now
-from .schemas import DatasetImportResult, StudyComparison, StudyCreate, StudyUpdate
+from .salary_model import estimate_salary
+from .schemas import DatasetImportResult, DatasetPreview, SalaryEstimateRequest, StudyComparison, StudyCreate, StudyUpdate
 
 MAX_UPLOAD_BYTES = int(os.getenv("SPOTWISE_MAX_UPLOAD_MB", "20")) * 1024 * 1024
 MAX_UPLOAD_ROWS = int(os.getenv("SPOTWISE_MAX_UPLOAD_ROWS", "100000"))
@@ -68,41 +65,6 @@ def as_public_batch(batch: SignalBatch) -> dict:
         "row_count": batch.row_count,
         "imported_at": batch.imported_at.isoformat() + "Z",
     }
-
-
-def _normalise_header(header: str) -> str:
-    return "".join(character for character in (header or "").casefold().strip() if character.isalnum())
-
-
-def _value(row: dict[str, str], *keys: str) -> str:
-    normalized = {_normalise_header(key): (value or "").strip() for key, value in row.items() if key}
-    for key in keys:
-        result = normalized.get(_normalise_header(key), "")
-        if result:
-            return result
-    return ""
-
-
-def _optional_float(raw: str, label: str, line: int) -> float | None:
-    if not raw:
-        return None
-    try:
-        value = float(raw.replace(",", "").strip())
-    except ValueError as exc:
-        raise ValueError(f"Line {line}: {label} must be numeric") from exc
-    if not math.isfinite(value):
-        raise ValueError(f"Line {line}: {label} must be a finite number")
-    return value
-
-
-def _parse_datetime(raw: str, line: int) -> datetime | None:
-    if not raw:
-        return None
-    text = raw.strip().replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(text).replace(tzinfo=None)
-    except ValueError as exc:
-        raise ValueError(f"Line {line}: observed_at must be ISO date/time, for example 2026-06-01T08:00:00") from exc
 
 
 @app.get("/api/v1/health", tags=["system"])
@@ -161,6 +123,14 @@ def areas(city: str = Query(min_length=2, max_length=90), session: Session = Dep
     return {"city": city, "areas": sorted(values, key=str.casefold)}
 
 
+@app.post("/api/v1/workforce/salary-estimate", tags=["workforce"])
+def workforce_salary_estimate(body: SalaryEstimateRequest):
+    try:
+        return estimate_salary(body.city, body.job_title, body.skills, body.experience_years)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail="Salary model has not been trained. See the README training instructions.") from exc
+
+
 @app.get("/api/v1/dashboard", tags=["analysis"])
 def dashboard(
     city: str = Query(default="Mumbai", min_length=2, max_length=90),
@@ -199,106 +169,76 @@ def data_sources(session: Session = Depends(get_session), data: dict = Depends(g
     return {"kaggle_sources": data.get("sources", []), "uploaded_sources": [as_public_batch(item) for item in uploaded]}
 
 
+def _read_and_clean_upload(category: str, filename: str, content: bytes, skip_duplicates: bool, normalize_labels: bool) -> dict:
+    try:
+        rows = read_rows(filename, content, MAX_UPLOAD_ROWS)
+        return normalize_rows(rows, category, skip_duplicates, normalize_labels, MAX_UPLOAD_ROWS)
+    except OverflowError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=415, detail="Text files must use UTF-8 encoding.") from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=422, detail=f"Could not read this file: {exc}") from exc
+
+
+def _validate_import_category(category: str) -> str:
+    category = category.strip().casefold()
+    if category not in ALLOWED_CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"Choose a category from: {', '.join(sorted(ALLOWED_CATEGORIES))}")
+    return category
+
+
+async def _read_upload_file(file: UploadFile) -> tuple[str, bytes]:
+    filename = Path(file.filename or "upload.csv").name[:180]
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    await file.close()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"The file exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.")
+    if not Path(filename).suffix:
+        raise HTTPException(status_code=415, detail="Include a supported file extension: CSV, XLSX, JSON, JSONL, or Parquet.")
+    return filename, content
+
+
+@app.post("/api/v1/datasets/preview", response_model=DatasetPreview, tags=["datasets"])
+async def preview_dataset(
+    category: str = Form(...),
+    skip_duplicates: bool = Form(default=True),
+    normalize_labels: bool = Form(default=True),
+    file: UploadFile = File(...),
+):
+    category = _validate_import_category(category)
+    filename, content = await _read_upload_file(file)
+    scan = _read_and_clean_upload(category, filename, content, skip_duplicates, normalize_labels)
+    return DatasetPreview(
+        filename=filename, format=Path(filename).suffix.lstrip(".").upper(),
+        **{key: scan[key] for key in ("scanned_rows", "clean_rows", "skipped_invalid_rows", "duplicates_removed", "geocoded_rows", "timestamped_rows", "minimum_value", "median_value", "maximum_value", "errors", "sample_rows")},
+    )
+
+
 @app.post("/api/v1/datasets/import", status_code=status.HTTP_201_CREATED, response_model=DatasetImportResult, tags=["datasets"])
 async def import_dataset(
     category: str = Form(...),
     name: str = Form(..., min_length=2, max_length=120),
-    source: str = Form(default="User supplied CSV", max_length=240),
+    source: str = Form(default="User supplied dataset", max_length=240),
     skip_duplicates: bool = Form(default=True),
     normalize_labels: bool = Form(default=True),
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ):
-    category = category.strip().casefold()
-    if category not in ALLOWED_CATEGORIES:
-        raise HTTPException(status_code=422, detail=f"Choose a category from: {', '.join(sorted(ALLOWED_CATEGORIES))}")
-    filename = Path(file.filename or "upload.csv").name[:180]
-    if not filename.casefold().endswith(".csv"):
-        raise HTTPException(status_code=415, detail="Upload a CSV file. Raw uploads are not retained after import.")
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    await file.close()
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"The CSV exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.")
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=415, detail="The CSV must use UTF-8 encoding.") from exc
-
-    try:
-        dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel
-    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
-    if not reader.fieldnames:
-        raise HTTPException(status_code=422, detail="The CSV needs a header row.")
-    normalized_headers = {_normalise_header(header) for header in reader.fieldnames}
-    if not normalized_headers.intersection({"city", "market", "cityname"}):
-        raise HTTPException(status_code=422, detail="Add a city column. Supported fields are listed in the Data & methods section.")
-
-    observations: list[Observation] = []
-    errors: list[str] = []
-    seen_rows: set[tuple] = set()
-    duplicate_rows = 0
-    raw_rows = 0
-    for line_number, row in enumerate(reader, start=2):
-        if line_number - 1 > MAX_UPLOAD_ROWS:
-            raise HTTPException(status_code=413, detail=f"The CSV exceeds the {MAX_UPLOAD_ROWS:,} row limit.")
-        raw_rows += 1
-        if None in row:
-            errors.append(f"Line {line_number}: row has more columns than the header")
-            continue
-        tidy = lambda value: re.sub(r"\s+", " ", value).strip() if normalize_labels else value.strip()
-        city = tidy(_value(row, "city", "market", "city_name"))
-        if not city:
-            errors.append(f"Line {line_number}: city is required")
-            continue
-        area = tidy(_value(row, "area", "locality", "neighborhood", "neighbourhood", "district")) or "Citywide"
-        metric = tidy(_value(row, "metric", "measure", "field", "signal") or category)
-        raw_value = _value(row, "value", "count", "amount", "visitors", "vehicles", "speed", "available_spaces", "salary", "rent", "cost")
-        if not raw_value and category in {"competition", "transit"}:
-            raw_value = "1"
-        if not raw_value:
-            errors.append(f"Line {line_number}: add a numeric value/count column")
-            continue
-        try:
-            numeric_value = _optional_float(raw_value, "value", line_number)
-            if numeric_value is not None and numeric_value < 0:
-                raise ValueError(f"Line {line_number}: value cannot be negative")
-            latitude = _optional_float(_value(row, "latitude", "lat"), "latitude", line_number)
-            longitude = _optional_float(_value(row, "longitude", "lon", "lng"), "longitude", line_number)
-            observed_at = _parse_datetime(_value(row, "observed_at", "timestamp", "datetime", "date"), line_number)
-            if (latitude is None) != (longitude is None):
-                raise ValueError(f"Line {line_number}: latitude and longitude must appear together")
-            if latitude is not None and not -90 <= latitude <= 90:
-                raise ValueError(f"Line {line_number}: latitude must be between -90 and 90")
-            if longitude is not None and not -180 <= longitude <= 180:
-                raise ValueError(f"Line {line_number}: longitude must be between -180 and 180")
-        except ValueError as exc:
-            errors.append(str(exc))
-            continue
-        detail = tidy(_value(row, "business_type", "category_label", "mode", "kind", "type", "competitor_type"))[:100] or None
-        unit = tidy(_value(row, "unit", "units", "measurement_unit") or "count")[:40]
-        observation_name = tidy(_value(row, "name", "business_name", "station_name", "label"))[:180] or None
-        duplicate_key = (
-            city.casefold(), area.casefold(), category, metric.casefold(), numeric_value, unit.casefold(),
-            observation_name.casefold() if observation_name else None, detail.casefold() if detail else None,
-            observed_at.isoformat() if observed_at else None, latitude, longitude,
-        )
-        if skip_duplicates and duplicate_key in seen_rows:
-            duplicate_rows += 1
-            continue
-        seen_rows.add(duplicate_key)
-        observations.append(Observation(
-            city=city[:90], area=area[:120], category=category, metric=metric[:80], value=numeric_value,
-            unit=unit, name=observation_name,
-            detail=detail, observed_at=observed_at, latitude=latitude, longitude=longitude,
-            metadata_json="{}",
-        ))
-
+    category = _validate_import_category(category)
+    filename, content = await _read_upload_file(file)
+    scan = _read_and_clean_upload(category, filename, content, skip_duplicates, normalize_labels)
+    observations = scan["observations"]
+    errors = scan["errors"]
+    duplicates = scan["duplicates_removed"]
     if not observations:
         raise HTTPException(status_code=422, detail={"message": "No usable rows found.", "errors": errors[:10]})
 
-    batch = SignalBatch(name=name.strip(), category=category, filename=filename, source=source.strip() or "User supplied CSV", row_count=len(observations))
+    batch = SignalBatch(name=name.strip(), category=category, filename=filename, source=source.strip() or "User supplied dataset", row_count=len(observations))
     session.add(batch)
     session.flush()
     for observation in observations:
@@ -307,21 +247,16 @@ async def import_dataset(
     session.commit()
     session.refresh(batch)
     warnings = [f"{len(errors):,} invalid row(s) were skipped; first issue: {errors[0]}."] if errors else []
-    if duplicate_rows:
-        warnings.append(f"{duplicate_rows:,} exact duplicate row(s) were removed.")
+    if duplicates:
+        warnings.append(f"{duplicates:,} exact duplicate row(s) were removed.")
     warnings.append("Rows were validated and normalized into the local database; the original file is not retained.")
-    values = sorted(item.value for item in observations)
-    middle = len(values) // 2
-    median = values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
     return DatasetImportResult(
         id=batch.id, name=batch.name, category=batch.category, row_count=batch.row_count,
-        imported_at=batch.imported_at.isoformat() + "Z", warnings=warnings, scanned_rows=raw_rows,
-        skipped_invalid_rows=len(errors), duplicates_removed=duplicate_rows,
-        geocoded_rows=sum(item.latitude is not None for item in observations),
-        timestamped_rows=sum(item.observed_at is not None for item in observations),
-        minimum_value=values[0], median_value=median, maximum_value=values[-1],
+        imported_at=batch.imported_at.isoformat() + "Z", warnings=warnings,
+        scanned_rows=scan["scanned_rows"], skipped_invalid_rows=scan["skipped_invalid_rows"], duplicates_removed=duplicates,
+        geocoded_rows=scan["geocoded_rows"], timestamped_rows=scan["timestamped_rows"],
+        minimum_value=scan["minimum_value"], median_value=scan["median_value"], maximum_value=scan["maximum_value"],
     )
-
 
 @app.delete("/api/v1/data-sources/{batch_id}", tags=["datasets"])
 def delete_dataset(batch_id: int, session: Session = Depends(get_session)):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -77,3 +77,26 @@ class DatasetImportResult(BaseModel):
     minimum_value: float | None = None
     median_value: float | None = None
     maximum_value: float | None = None
+
+
+class DatasetPreview(BaseModel):
+    filename: str
+    format: str
+    scanned_rows: int
+    clean_rows: int
+    skipped_invalid_rows: int
+    duplicates_removed: int
+    geocoded_rows: int
+    timestamped_rows: int
+    minimum_value: float | None = None
+    median_value: float | None = None
+    maximum_value: float | None = None
+    errors: list[str] = Field(default_factory=list)
+    sample_rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SalaryEstimateRequest(BaseModel):
+    city: str = Field(min_length=2, max_length=90)
+    job_title: str = Field(min_length=2, max_length=160)
+    skills: str = Field(default="", max_length=500)
+    experience_years: float = Field(default=0, ge=0, le=60)

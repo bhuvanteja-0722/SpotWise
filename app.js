@@ -61,6 +61,9 @@
       $('#citySelect').addEventListener('change', async () => {
         clearActiveStudy();
         $('#areaSelect').value = '';
+        state.areas = [];
+        renderAreaSuggestions();
+        hideAreaSuggestions();
         updateSelectionSummary();
         await refreshAreas();
         await refreshDashboard();
@@ -121,7 +124,12 @@
   async function refreshAreas() {
     const city = $('#citySelect').value;
     const current = $('#areaSelect').value.trim();
+    const requestId = (refreshAreas.requestId || 0) + 1;
+    refreshAreas.requestId = requestId;
     const result = await api(`/api/v1/areas?city=${encodeURIComponent(city)}`);
+    // A slower response for a previously selected city must never replace the
+    // neighborhood list for the city currently visible in the selector.
+    if (requestId !== refreshAreas.requestId || city !== $('#citySelect').value) return;
     state.areas = result.areas;
     renderAreaSuggestions();
     $('#areaSelect').value = current;
@@ -279,7 +287,7 @@
   function renderSignals(signals, area) {
     const entries = Object.entries(signals?.categories || {});
     if (!entries.length) {
-      $('#signalGrid').innerHTML = `<div class="empty-card">No local datasets are imported for ${escapeHtml(area || $('#citySelect').value)} yet. Use the CSV importer below to add footfall, POI, traffic, parking, transit, workforce, wage, or local-cost data.</div>`;
+      $('#signalGrid').innerHTML = `<div class="empty-card">No local datasets are imported for ${escapeHtml(area || $('#citySelect').value)} yet. Use the data importer below to add footfall, POI, traffic, parking, transit, workforce, wage, or local-cost data.</div>`;
       $('#signalScope').textContent = signals?.warnings?.join(' ') || '';
       return;
     }
@@ -535,29 +543,6 @@
   let uploadScanVersion = 0;
   let uploadReady = false;
 
-  function csvRecords(text, visit) {
-    const firstLine = text.slice(0, 4096).split(/\r?\n/, 1)[0] || '';
-    const delimiters = [',', ';', '\t', '|'];
-    const delimiter = delimiters.sort((a, b) => firstLine.split(b).length - firstLine.split(a).length)[0];
-    let row = [], field = '', quoted = false;
-    for (let index = 0; index < text.length; index += 1) {
-      const char = text[index];
-      if (quoted) {
-        if (char === '"' && text[index + 1] === '"') { field += '"'; index += 1; }
-        else if (char === '"') quoted = false;
-        else field += char;
-      } else if (char === '"' && field.length === 0) quoted = true;
-      else if (char === delimiter) { row.push(field); field = ''; }
-      else if (char === '\n' || char === '\r') {
-        if (char === '\r' && text[index + 1] === '\n') index += 1;
-        row.push(field); field = '';
-        if (row.some((cell) => cell.trim())) visit(row);
-        row = [];
-      } else field += char;
-    }
-    if (field.length || row.length) { row.push(field); if (row.some((cell) => cell.trim())) visit(row); }
-  }
-
   async function scanUpload() {
     const version = ++uploadScanVersion;
     const file = importForm.elements.file.files?.[0];
@@ -568,82 +553,42 @@
     if (!file) { preview.hidden = true; message.textContent = ''; importButton.textContent = 'Choose a file to scan ↥'; return; }
     preview.hidden = false;
     preview.textContent = `Scanning ${file.name} · ${Math.max(1, Math.ceil(file.size / 1024))} KB…`;
-    message.textContent = 'Checking the header, required fields, values, dates, coordinates, row count, and duplicate rows.';
+    message.textContent = 'The server is checking file structure, required fields, values, dates, coordinates, duplicates, and row limits.';
     if (file.size > 20 * 1024 * 1024) {
-      preview.innerHTML = '<b>File is too large.</b> Choose a CSV file under 20 MB.';
+      preview.innerHTML = '<b>File is too large.</b> Choose a supported file under 20 MB.';
       message.textContent = '';
       importButton.textContent = 'File too large';
       return;
     }
     try {
-      const text = (await file.text()).replace(/^\uFEFF/, '');
+      const scanForm = new FormData();
+      scanForm.set('category', importForm.elements.category.value);
+      scanForm.set('skip_duplicates', importForm.elements.skip_duplicates.checked);
+      scanForm.set('normalize_labels', importForm.elements.normalize_labels.checked);
+      scanForm.set('file', file);
+      const result = await api('/api/v1/datasets/preview', { method: 'POST', body: scanForm });
       if (version !== uploadScanVersion) return;
-      const category = importForm.elements.category.value;
-      const skipDuplicates = importForm.elements.skip_duplicates.checked;
-      const normalizeLabels = importForm.elements.normalize_labels.checked;
-      const aliases = {
-        city: ['city', 'market', 'cityname', 'city_name'], area: ['area', 'locality', 'neighborhood', 'neighbourhood', 'district'],
-        value: ['value', 'count', 'amount', 'visitors', 'vehicles', 'speed', 'available_spaces', 'salary', 'rent', 'cost'],
-        metric: ['metric', 'measure', 'field', 'signal'], observed: ['observed_at', 'timestamp', 'datetime', 'date'],
-        lat: ['latitude', 'lat'], lon: ['longitude', 'lon', 'lng'], unit: ['unit', 'units', 'measurement_unit'],
-        name: ['name', 'business_name', 'station_name', 'label'],
-      };
-      const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-      const headKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      let headers = null, scanned = 0, invalid = 0, duplicates = 0, geocoded = 0, timed = 0;
-      const seen = new Set(), sample = [], errors = [];
-      const clean = (value) => normalizeLabels ? norm(value) : String(value || '').trim();
-      csvRecords(text, (cells) => {
-        if (!headers) { headers = cells.map(headKey); return; }
-        scanned += 1;
-        if (scanned > 100000) return;
-        const values = Object.fromEntries(headers.map((key, index) => [key, cells[index] || '']));
-        const pick = (key) => (aliases[key] || []).map(headKey).map((alias) => values[alias]).find((value) => value != null && String(value).trim() !== '') || '';
-        const city = clean(pick('city'));
-        const area = clean(pick('area')) || 'Citywide';
-        let rawValue = pick('value');
-        if (!rawValue && ['competition', 'transit'].includes(category)) rawValue = '1';
-        const numericValue = Number(String(rawValue).replace(/,/g, '').trim());
-        const latitude = pick('lat'), longitude = pick('lon');
-        const date = pick('observed');
-        let issue = '';
-        if (!city) issue = 'missing city';
-        else if (!rawValue || !Number.isFinite(numericValue) || numericValue < 0) issue = 'value must be a non-negative number';
-        else if ((Boolean(latitude) !== Boolean(longitude)) || (latitude && (!Number.isFinite(Number(latitude)) || Number(latitude) < -90 || Number(latitude) > 90)) || (longitude && (!Number.isFinite(Number(longitude)) || Number(longitude) < -180 || Number(longitude) > 180))) issue = 'coordinates must be a valid latitude/longitude pair';
-        else if (date && Number.isNaN(Date.parse(date))) issue = 'date must be a readable ISO date/time';
-        if (issue) { invalid += 1; if (errors.length < 3) errors.push(issue); return; }
-        const key = JSON.stringify([city.toLowerCase(), area.toLowerCase(), category, clean(pick('metric')).toLowerCase() || category, numericValue, clean(pick('unit')).toLowerCase(), clean(pick('name')).toLowerCase(), date, latitude, longitude]);
-        if (skipDuplicates && seen.has(key)) { duplicates += 1; return; }
-        seen.add(key);
-        if (latitude && longitude) geocoded += 1;
-        if (date) timed += 1;
-        if (sample.length < 4) sample.push([city, area, clean(pick('metric')) || category, numericValue, clean(pick('unit')) || 'count']);
-      });
-      if (version !== uploadScanVersion) return;
-      const hasCity = headers?.some((header) => aliases.city.map(headKey).includes(header));
-      const hasValue = headers?.some((header) => aliases.value.map(headKey).includes(header));
-      const valueMayDefault = ['competition', 'transit'].includes(category);
-      const blocking = !headers || !hasCity || (!hasValue && !valueMayDefault) || scanned === 0 || scanned > 100000 || sample.length === 0;
-      const cleanCount = Math.max(0, scanned - invalid - duplicates);
-      uploadReady = !blocking;
-      importButton.disabled = blocking;
-      importButton.innerHTML = blocking ? 'Fix scan issues to import <span>↥</span>' : `Import ${number(cleanCount)} clean row${cleanCount === 1 ? '' : 's'} <span>↥</span>`;
-      const report = [];
-      if (!headers) report.push('<span class="preview-warn">No readable CSV header was found.</span>');
-      if (headers && !hasCity) report.push('<span class="preview-warn">Add a city column (city, market, or city_name).</span>');
-      if (headers && !hasValue && !valueMayDefault) report.push('<span class="preview-warn">Add a numeric value/count column.</span>');
-      if (scanned > 100000) report.push('<span class="preview-warn">The file is over the 100,000 row limit.</span>');
-      if (invalid) report.push(`<span class="preview-warn">${number(invalid)} row(s) will be skipped: ${escapeHtml(errors.join('; '))}.</span>`);
-      if (duplicates) report.push(`<span>${number(duplicates)} exact duplicate row(s) will be removed.</span>`);
-      if (geocoded) report.push(`${number(geocoded)} row(s) have coordinates.`);
-      if (timed) report.push(`${number(timed)} row(s) have timestamps for peak-hour analysis.`);
-      const table = sample.length ? `<table><thead><tr><th>City</th><th>Area</th><th>Metric</th><th>Value</th><th>Unit</th></tr></thead><tbody>${sample.map((cells) => `<tr>${cells.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '';
-      preview.innerHTML = `<b>${number(scanned)} rows scanned</b> · ${number(Math.max(0, scanned - invalid - duplicates))} clean rows · ${number(invalid)} invalid · ${number(duplicates)} duplicates ${report.length ? `<div>${report.join('<br>')}</div>` : ''}${table}`;
-      message.textContent = uploadReady ? 'Review the sample and scan summary, then import. The server validates every row again before saving.' : 'Fix the scan issue above, then choose the file again.';
+      uploadReady = result.clean_rows > 0;
+      importButton.disabled = !uploadReady;
+      const plural = result.clean_rows === 1 ? '' : 's';
+      importButton.innerHTML = uploadReady ? `Import ${number(result.clean_rows)} clean row${plural} <span>↥</span>` : 'Fix scan issues to import <span>↥</span>';
+      const sample = result.sample_rows || [];
+      const headers = sample.length ? Object.keys(sample[0]) : [];
+      const table = sample.length ? `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${sample.map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row[header])}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '';
+      const issues = (result.errors || []).map((issue) => `<div class="preview-warn">${escapeHtml(issue)}</div>`).join('');
+      const extraErrors = result.skipped_invalid_rows > (result.errors || []).length ? `<div class="preview-warn">Showing first ${number(result.errors.length)} of ${number(result.skipped_invalid_rows)} invalid rows.</div>` : '';
+      const quality = [
+        result.duplicates_removed ? `${number(result.duplicates_removed)} exact duplicates removed` : '',
+        result.geocoded_rows ? `${number(result.geocoded_rows)} geocoded` : '',
+        result.timestamped_rows ? `${number(result.timestamped_rows)} timestamped` : '',
+      ].filter(Boolean).join(' · ');
+      const range = result.minimum_value == null ? 'No usable numeric values' : `Values ${number(result.minimum_value, 1)}–${number(result.maximum_value, 1)} · median ${number(result.median_value, 1)}`;
+      preview.innerHTML = `<b>${escapeHtml(result.filename)}</b> · ${escapeHtml(result.format)} · ${number(result.scanned_rows)} scanned · ${number(result.clean_rows)} clean · ${number(result.skipped_invalid_rows)} invalid · ${number(result.duplicates_removed)} duplicate<br>${escapeHtml(range)}${quality ? `<br>${escapeHtml(quality)}` : ''}${issues}${extraErrors}${table}`;
+      message.textContent = uploadReady ? 'Review the sample and scan summary, then import. The backend validates every row again before saving.' : 'No valid rows to import. Correct the file and scan it again.';
     } catch (error) {
       if (version !== uploadScanVersion) return;
       preview.innerHTML = `<b>Could not scan file.</b> ${escapeHtml(error.message)}`;
-      importButton.textContent = 'Choose a readable CSV';
+      importButton.textContent = 'Choose a readable data file';
       message.textContent = '';
     }
   }
@@ -655,12 +600,12 @@
 
   importForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!uploadReady) { toast('Scan a valid CSV before importing'); return; }
+    if (!uploadReady) { toast('Scan a valid data file before importing'); return; }
     const formElement = event.currentTarget;
     const message = $('#importMessage');
     importButton.disabled = true;
     importButton.innerHTML = 'Validating and importing…';
-    message.textContent = 'The backend is validating the rows again before adding normalized records to your local database.';
+    message.textContent = 'The backend is validating the file again before adding normalized records to your local database.';
     try {
       const form = new FormData(formElement);
       const result = await api('/api/v1/datasets/import', { method: 'POST', body: form });
@@ -675,6 +620,36 @@
       toast('Dataset imported and analyzed');
     } catch (error) { message.textContent = error.message; }
     finally { if (uploadReady) importButton.disabled = false; }
+  });
+
+  $('#salaryEstimateForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const resultBox = $('#salaryEstimateResult');
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    resultBox.textContent = 'Estimating from the trained salary benchmark…';
+    try {
+      const result = await api('/api/v1/workforce/salary-estimate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          city: $('#citySelect').value,
+          job_title: form.elements.job_title.value,
+          skills: form.elements.skills.value,
+          experience_years: Number(form.elements.experience_years.value),
+        }),
+      });
+      const [low, high] = result.monthly_range_inr;
+      resultBox.innerHTML = `<div class="salary-result-values"><span>Estimated monthly pay</span><b>${money(result.monthly_salary_inr)}</b></div><div class="salary-result-values"><span>Empirical monthly range</span><b>${money(low)}–${money(high)}</b></div><small>${escapeHtml(result.role_group)} · ${escapeHtml(result.note)}</small><button class="text-button" id="useSalaryEstimate" type="button">Use estimate in monthly staff pay ↗</button>`;
+      $('#useSalaryEstimate').addEventListener('click', () => {
+        $('#inputPay').value = result.monthly_salary_inr;
+        updateScenario();
+        $('#planner').scrollIntoView({ behavior: 'smooth' });
+        toast('Estimated monthly staff pay added to your scenario');
+      });
+    } catch (error) {
+      resultBox.textContent = `Salary estimate unavailable: ${error.message}`;
+    } finally { submit.disabled = false; }
   });
 
   $('#exportButton').addEventListener('click', () => {

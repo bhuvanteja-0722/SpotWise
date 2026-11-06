@@ -1,0 +1,35 @@
+{
+  "model_name": "SpotWise disclosed salary benchmark",
+  "trained_at": "2026-11-06",
+  "source_url": "https://www.kaggle.com/datasets/shivamshrivastava21/indian-job-market-dataset-2025-2026",
+  "source_license": "CC BY-NC-SA 4.0; non-commercial and share-alike terms apply",
+  "target": "Annual INR midpoint of disclosed minimum/maximum salary ranges",
+  "features": [
+    "job title and skill tags",
+    "broad metro/other-India market",
+    "inferred job role group",
+    "minimum and maximum experience years"
+  ],
+  "source_rows": 97929,
+  "usable_salary_rows": 33203,
+  "excluded_rows": 64726,
+  "salary_coverage_percent": 33.91,
+  "training_rows": 26617,
+  "holdout_rows": 6586,
+  "holdout_split": "Random 80/20 split grouped by normalized exact job title to keep identical titles out of both sets",
+  "holdout_mae_inr": 274469.27,
+  "holdout_median_absolute_error_inr": 102409.49,
+  "holdout_r2": 0.5234,
+  "holdout_median_absolute_percentage_error": 23.55,
+  "holdout_log_residual_90pct_interval": [
+    -0.65552,
+    0.69966
+  ],
+  "holdout_log_interval_coverage_percent": 89.98,
+  "limitations": [
+    "2025 online postings with disclosed INR ranges only; not a census of wages or worker availability.",
+    "Broad city classification from listing location text; no neighborhood wage resolution.",
+    "The empirical error band is from a random title-grouped holdout and is not a guaranteed confidence interval.",
+    "Model estimates an annual posted-salary benchmark; use local offers and current pay surveys for hiring decisions."
+  ]
+}
