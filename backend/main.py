@@ -21,6 +21,13 @@ from .transit_sources import sources_for_city
 
 MAX_UPLOAD_BYTES = int(os.getenv("SPOTWISE_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 MAX_UPLOAD_ROWS = int(os.getenv("SPOTWISE_MAX_UPLOAD_ROWS", "100000"))
+CITY_LEVEL_AREA_ALIASES = {
+    "bengaluru": {"bengaluru", "bangalore", "banglore"},
+    "mumbai": {"mumbai", "bombay"},
+    "chennai": {"chennai", "madras"},
+    "kolkata": {"kolkata", "calcutta"},
+    "delhi ncr": {"delhi ncr", "delhi", "new delhi"},
+}
 ALLOWED_CATEGORIES = {
     "footfall", "competition", "traffic", "parking", "transit",
     "worker_supply", "salary", "cost_of_living", "rent",
@@ -122,6 +129,8 @@ def areas(city: str = Query(min_length=2, max_length=90), session: Session = Dep
     values.update(session.scalars(select(Study.area).where(func.lower(Study.city) == city.casefold(), Study.area.is_not(None))))
     if city.casefold() == "mumbai":
         values.update(item["name"] for item in data.get("rentals", {}).get("localities", []))
+    city_labels = CITY_LEVEL_AREA_ALIASES.get(city.strip().casefold(), {city.strip().casefold()})
+    values = {area for area in values if area.strip().casefold() not in city_labels}
     return {"city": city, "areas": sorted(values, key=str.casefold)}
 
 
@@ -145,6 +154,7 @@ def business_category_suggestions(body: PlaceCategoryRequest):
 def dashboard(
     city: str = Query(default="Mumbai", min_length=2, max_length=90),
     area: str | None = Query(default=None, max_length=120),
+    business_type: str | None = Query(default=None, max_length=80),
     session: Session = Depends(get_session),
     data: dict = Depends(get_data),
 ):
@@ -153,7 +163,7 @@ def dashboard(
         "selected_city": city,
         "selected_area": area,
         "market_context": market_context(data, city),
-        "uploaded_signals": summarize_signals(session, city, area),
+        "uploaded_signals": summarize_signals(session, city, area, business_type=business_type),
         "transit_sources": sources_for_city(city),
         "study_count": session.scalar(select(func.count(Study.id))) or 0,
         "dataset_count": session.scalar(select(func.count(SignalBatch.id))) or 0,
@@ -164,6 +174,7 @@ def dashboard(
 def signals(
     city: str = Query(min_length=2, max_length=90),
     area: str | None = Query(default=None, max_length=120),
+    business_type: str | None = Query(default=None, max_length=80),
     radius_km: float | None = Query(default=None, gt=0, le=50),
     latitude: float | None = Query(default=None, ge=-90, le=90),
     longitude: float | None = Query(default=None, ge=-180, le=180),
@@ -171,7 +182,7 @@ def signals(
 ):
     if (latitude is None) != (longitude is None):
         raise HTTPException(status_code=422, detail="Latitude and longitude must be provided together")
-    return summarize_signals(session, city, area, radius_km, latitude, longitude)
+    return summarize_signals(session, city, area, radius_km, latitude, longitude, business_type)
 
 
 @app.get("/api/v1/data-sources", tags=["datasets"])
@@ -212,7 +223,7 @@ async def _read_upload_file(file: UploadFile) -> tuple[str, bytes]:
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"The file exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.")
     if not Path(filename).suffix:
-        raise HTTPException(status_code=415, detail="Include a supported file extension: CSV, XLSX, JSON, JSONL, or Parquet.")
+        raise HTTPException(status_code=415, detail="Include a supported file extension: CSV, XLSX, JSON, JSONL, Parquet, or static GTFS ZIP.")
     return filename, content
 
 

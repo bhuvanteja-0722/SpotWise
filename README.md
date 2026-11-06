@@ -33,6 +33,8 @@ python3 run.py
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The API is at `/api/v1`; interactive API docs are at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). The default database file is `data/spotwise.db` and is ignored by Git. The website and API run on the same origin, so no browser API key or CORS setup is needed.
 
+Run the backend workflow regression checks with `python3 -m unittest discover -s tests -v`. They use a disposable SQLite database and exercise imports, cleaning, city scoping, transit feeds, salary/category models, scoring, studies, and API validation.
+
 Or run the app in a container with `docker compose up --build`; the `data` directory is mounted so the SQLite database persists across container restarts.
 
 For a different database, set `DATABASE_URL`. SQLite is the default for a single-user class project; SQLAlchemy can connect to PostgreSQL when its database driver is installed and configured.

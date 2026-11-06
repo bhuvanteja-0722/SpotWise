@@ -1,6 +1,7 @@
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const state = { analysis: null, studies: [], dashboard: null, sources: null, areas: [] };
+  const bootStartedAt = performance.now();
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const number = (value, digits = 0) => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: digits });
   const money = (value, digits = 1) => {
@@ -31,6 +32,16 @@
     element.classList.add('show');
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => element.classList.remove('show'), 2600);
+  }
+
+  async function finishBootScreen() {
+    const screen = $('#bootScreen');
+    if (!screen) return;
+    const remaining = Math.max(0, 520 - (performance.now() - bootStartedAt));
+    if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
+    screen.classList.add('is-ready');
+    screen.setAttribute('aria-hidden', 'true');
+    setTimeout(() => screen.remove(), 320);
   }
 
   function setApiStatus(connected, label) {
@@ -98,7 +109,7 @@
       $('#areaSelect').addEventListener('input', () => { clearActiveStudy(); renderAreaSuggestions(); updateSelectionSummary(); });
       $('#areaSelect').addEventListener('focus', showAreaSuggestions);
       $('#areaSelect').addEventListener('blur', () => setTimeout(hideAreaSuggestions, 120));
-      $('#businessSelect').addEventListener('change', () => { clearActiveStudy(); updateSelectionSummary(); updateWorkforce(); });
+      $('#businessSelect').addEventListener('change', () => { clearActiveStudy(); updateSelectionSummary(); updateWorkforce(); refreshDashboard(); });
       await Promise.all([refreshAreas(), refreshDashboard(), refreshStudies(), refreshSources(), refreshCoverage()]);
       initialiseScenario();
       updateScenario();
@@ -109,6 +120,8 @@
       $('#railRecords').textContent = 'See README';
       $('#rentChart').innerHTML = `<div class="error-state">${escapeHtml(error.message)}<br>Start SpotWise with <code>python run.py</code>.</div>`;
       $('#studyList').innerHTML = '<div class="empty-card">The API is offline. Start the backend to load saved studies.</div>';
+    } finally {
+      await finishBootScreen();
     }
   }
 
@@ -210,9 +223,13 @@
   async function refreshDashboard() {
     const city = $('#citySelect').value;
     const area = $('#areaSelect').value;
-    const params = new URLSearchParams({ city });
+    const businessType = $('#businessSelect').value;
+    const requestId = (refreshDashboard.requestId || 0) + 1;
+    refreshDashboard.requestId = requestId;
+    const params = new URLSearchParams({ city, business_type: businessType });
     if (area) params.set('area', area);
     const response = await api(`/api/v1/dashboard?${params.toString()}`);
+    if (requestId !== refreshDashboard.requestId || city !== $('#citySelect').value || area !== $('#areaSelect').value || businessType !== $('#businessSelect').value) return;
     state.dashboard = response;
     state.analysis = response.analysis;
     renderDashboard(response);
@@ -222,20 +239,32 @@
     const data = response.analysis;
     const city = response.selected_city;
     const area = response.selected_area;
-    $('#rentalRecords').textContent = number(data.rentals.recordCount);
+    const hasLocalRent = city.toLowerCase() === 'mumbai';
+    $('#rentalRecords').textContent = hasLocalRent ? number(data.rentals.recordCount) : '—';
+    $('#rentalRecordsLabel').textContent = hasLocalRent ? 'Mumbai rental listings · 2023' : 'No rent dataset for this city';
     $('#jobRecords').textContent = number(data.jobs.recordCount);
     $('#railRecords').textContent = number(data.rail.recordCount);
     $('#generatedAt').textContent = `AGGREGATES BUILT ${data.generatedAt}`;
     $('#marketRent').textContent = city.toLowerCase() === 'mumbai' ? money(data.rentals.medianMonthlyRent) : 'Mumbai data only';
-    $('#validRentCount').textContent = `${number(data.rentals.validRentCount)} listings`;
-    $('#validAreaCount').textContent = `${number(data.rentals.validAreaCount)} listings`;
+    $('#validRentCount').textContent = hasLocalRent ? `${number(data.rentals.validRentCount)} listings` : 'Mumbai only';
+    $('#validAreaCount').textContent = hasLocalRent ? `${number(data.rentals.validAreaCount)} listings` : 'Mumbai only';
+    $('#rentSectionTitle').textContent = hasLocalRent ? 'Where the rent lands.' : 'Local rent evidence needed.';
+    $('#rentSectionDescription').textContent = hasLocalRent
+      ? 'Neighborhood-level residential asking rents derived from listed properties in Mumbai.'
+      : `No neighborhood-level rent dataset is loaded for ${city}. Enter a current commercial quote; Mumbai residential rents do not apply here.`;
+    $('#rentSourceBadge').textContent = 'MUMBAI ONLY · 2023 SNAPSHOT';
+    $('#rentPanelEyebrow').textContent = hasLocalRent ? 'MUMBAI LOCALITY COMPARISON' : 'NO LOCAL RENT DATA';
+    $('#rentInsightNote').textContent = hasLocalRent
+      ? 'This source contains residential listings, not commercial leases. Use it for rough neighborhood context, not a shop or cafe rent quote.'
+      : `This dataset only covers Mumbai residential listings. It is not shown as a rent estimate for ${city}. Enter a local commercial quote in the planner.`;
+    $('#rentWarning').hidden = !hasLocalRent;
     $('#rentCoverage').textContent = city.toLowerCase() === 'mumbai'
       ? `${number(data.rentals.localities.length)} localities · ${number(data.rentals.validRentCount)} valid rent rows`
       : 'Mumbai-only rental file · selected city has no rent observations';
     $('#plannerRentHint').textContent = city.toLowerCase() === 'mumbai'
       ? 'Select a Mumbai rent bar above to use its residential listing median as a starting reference.'
       : `No rental observations for ${city} are included. Replace the starting value with a current commercial rent quote.`;
-    renderRents(data.rentals);
+    renderRents(data.rentals, city);
     renderWorkforce(cityData(data, city), $('#businessSelect').value);
     renderMobility(city, railData(data, city), response.transit_sources || []);
     renderSignals(response.uploaded_signals, area);
@@ -260,10 +289,19 @@
     return data.rail.cities.find((item) => item.name.toLowerCase() === city.toLowerCase());
   }
 
-  function renderRents(rentals) {
+  function renderRents(rentals, city) {
+    const chart = $('#rentChart');
+    if (city.toLowerCase() !== 'mumbai') {
+      chart.classList.add('rent-chart-empty');
+      chart.innerHTML = `<div class="rent-empty-state"><b>No local rent listings available</b>Mumbai-only residential asking rents are hidden for ${escapeHtml(city)}. Add a current commercial lease quote to compare local feasibility.</div>`;
+      $('#rentCoverage').textContent = `No rent rows for ${city}`;
+      $('#marketRent').textContent = '—';
+      return;
+    }
+    chart.classList.remove('rent-chart-empty');
     const areas = rentals.localities.slice(0, 9);
     const max = Math.max(...areas.map((item) => item.medianMonthlyRent || 0), 1);
-    $('#rentChart').innerHTML = areas.map((item) => {
+    chart.innerHTML = areas.map((item) => {
       const height = Math.max(7, Math.round(item.medianMonthlyRent / max * 100));
       return `<button class="rent-column" type="button" aria-label="Use ${escapeHtml(item.name)} residential rent median ${money(item.medianMonthlyRent)} as a starting reference" data-area="${escapeHtml(item.name)}"><span class="rent-amount">${money(item.medianMonthlyRent)}</span><span class="rent-bar" style="height:${height}%"></span><span class="rent-locality">${escapeHtml(item.name)}</span></button>`;
     }).join('');
