@@ -55,19 +55,21 @@
 
   async function start() {
     try {
-      const markets = await api('/api/v1/markets');
-      $('#citySelect').innerHTML = markets.markets.map((city) => `<option value="${escapeHtml(city)}">${escapeHtml(city)}</option>`).join('');
-      $('#citySelect').value = markets.markets.includes('Mumbai') ? 'Mumbai' : markets.markets[0];
-      $('#businessSelect').innerHTML = markets.business_types.map((business) => `<option>${escapeHtml(business)}</option>`).join('');
+      await refreshMarkets();
       setApiStatus(true, 'Connected to FastAPI and the SpotWise database');
+      updateSelectionSummary();
       $('#citySelect').addEventListener('change', async () => {
         clearActiveStudy();
         $('#areaSelect').value = '';
+        updateSelectionSummary();
         await refreshAreas();
         await refreshDashboard();
       });
-      $('#areaSelect').addEventListener('change', () => { clearActiveStudy(); refreshDashboard(); });
-      $('#businessSelect').addEventListener('change', () => { clearActiveStudy(); updateWorkforce(); });
+      $('#areaSelect').addEventListener('change', () => { clearActiveStudy(); updateSelectionSummary(); refreshDashboard(); });
+      $('#areaSelect').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); clearActiveStudy(); updateSelectionSummary(); refreshDashboard(); }
+      });
+      $('#businessSelect').addEventListener('change', () => { clearActiveStudy(); updateSelectionSummary(); updateWorkforce(); });
       await Promise.all([refreshAreas(), refreshDashboard(), refreshStudies(), refreshSources(), refreshCoverage()]);
       initialiseScenario();
       updateScenario();
@@ -81,13 +83,44 @@
     }
   }
 
+  async function refreshMarkets() {
+    const previousCity = $('#citySelect').value;
+    const previousBusiness = $('#businessSelect').value;
+    const result = await api('/api/v1/markets');
+    const coverage = new Map((result.market_coverage || []).map((item) => [item.city, item.signals]));
+    $('#citySelect').innerHTML = result.markets.map((city) => {
+      const signals = coverage.get(city) || [];
+      const shortLabels = signals.map((signal) => signal === 'city-level jobs' ? 'Jobs' : signal === '2015 rail' ? 'Rail ’15' : signal === 'Mumbai-only residential rent' ? 'Rent (res.)' : signal.replace('imported local signal(s)', 'local'));
+      return `<option value="${escapeHtml(city)}">${escapeHtml(city)} · ${escapeHtml(shortLabels.join(' · ') || 'local data')}</option>`;
+    }).join('');
+    $('#citySelect').value = result.markets.includes(previousCity) ? previousCity : result.markets.includes('Mumbai') ? 'Mumbai' : result.markets[0];
+    const datasetTypes = new Set(result.dataset_business_types || []);
+    const common = result.business_types.filter((business) => !datasetTypes.has(business));
+    const imported = result.business_types.filter((business) => datasetTypes.has(business));
+    $('#businessSelect').innerHTML = `<optgroup label="Common business types">${common.map((business) => `<option value="${escapeHtml(business)}">${escapeHtml(business)}</option>`).join('')}</optgroup>${imported.length ? `<optgroup label="From imported competitor data">${imported.map((business) => `<option value="${escapeHtml(business)}">${escapeHtml(business)}</option>`).join('')}</optgroup>` : ''}`;
+    const allBusinesses = [...common, ...imported];
+    $('#businessSelect').value = allBusinesses.includes(previousBusiness) ? previousBusiness : common[0];
+    updateSelectionSummary();
+  }
+
+  function updateSelectionSummary() {
+    const city = $('#citySelect').value || 'Choose a market';
+    const area = $('#areaSelect').value || 'Citywide';
+    const business = $('#businessSelect').value || 'Choose a business';
+    const areaNote = state.areas.length ? `${number(state.areas.length)} neighborhood suggestion${state.areas.length === 1 ? '' : 's'}` : 'No preset neighborhoods in the data yet; type one and add matching local evidence';
+    const marketNote = city.toLowerCase() === 'mumbai' ? 'Rent here is residential asking-price context only.' : 'No rent file for this market; enter a local commercial quote.';
+    $('#selectionSummary').textContent = `${business} · ${area}, ${city}. ${marketNote} ${areaNote}.`;
+    $('#marketCrumb').textContent = city;
+  }
+
   async function refreshAreas() {
     const city = $('#citySelect').value;
-    const current = $('#areaSelect').value;
+    const current = $('#areaSelect').value.trim();
     const result = await api(`/api/v1/areas?city=${encodeURIComponent(city)}`);
     state.areas = result.areas;
-    $('#areaSelect').innerHTML = '<option value="">Citywide</option>' + result.areas.map((area) => `<option value="${escapeHtml(area)}">${escapeHtml(area)}</option>`).join('');
-    if (result.areas.includes(current)) $('#areaSelect').value = current;
+    $('#areaSuggestions').innerHTML = result.areas.map((area) => `<option value="${escapeHtml(area)}"></option>`).join('');
+    $('#areaSelect').value = current;
+    updateSelectionSummary();
   }
 
   async function refreshDashboard() {
@@ -161,19 +194,31 @@
   }
 
   function renderWorkforce(cityDataItem, business) {
-    if (!cityDataItem) return;
-    $('#workforceTitle').textContent = `${cityDataItem.name} hiring snapshot`;
+    if (!cityDataItem) {
+      $('#workforceTitle').textContent = `${$('#citySelect').value} · ${business} lens`;
+      $('#cityJobs').textContent = 'No job dataset';
+      $('#citySalary').textContent = 'Not available';
+      $('#salaryDisclosure').textContent = '—';
+      $('#salaryDisclosureBar').style.width = '0';
+      $('#roleBars').innerHTML = '<div class="empty-card">No workforce records are available in this market yet. Import a local workforce or wage dataset to add evidence.</div>';
+      $('#skillCloud').innerHTML = '<span class="skill-tag">No local skill data</span>';
+      return;
+    }
+    $('#workforceTitle').textContent = `${cityDataItem.name} · ${business} lens`;
     $('#cityJobs').textContent = number(cityDataItem.postingCount);
     $('#citySalary').textContent = cityDataItem.medianAnnualSalary ? money(cityDataItem.medianAnnualSalary) : 'Not available';
     $('#salaryDisclosure').textContent = `${Number(cityDataItem.salaryDisclosureRate || 0).toFixed(1)}%`;
     $('#salaryDisclosureBar').style.width = `${Math.min(Number(cityDataItem.salaryDisclosureRate || 0), 100)}%`;
-    const priorities = {
-      'Cafe / restaurant': ['Food & hospitality', 'Customer service', 'Operations & logistics', 'Sales'],
-      'Retail shop': ['Retail', 'Sales', 'Customer service', 'Operations & logistics'],
-      'Salon / wellness': ['Customer service', 'Sales', 'Operations & logistics', 'Other'],
-      'Fitness studio': ['Customer service', 'Sales', 'Operations & logistics', 'Other'],
-      'Other local service': ['Customer service', 'Operations & logistics', 'Sales', 'Other'],
-    }[business] || [];
+    const normalizedBusiness = business.toLowerCase();
+    const priorities = /cafe|restaurant|bakery|dessert|food/.test(normalizedBusiness)
+      ? ['Food & hospitality', 'Customer service', 'Operations & logistics', 'Sales']
+      : /retail|grocery|convenience|clothing|fashion|pharmacy|electronics|furniture|home goods/.test(normalizedBusiness)
+        ? ['Retail', 'Sales', 'Customer service', 'Operations & logistics']
+        : /salon|wellness|fitness|health|clinic|pet care|veterinary/.test(normalizedBusiness)
+          ? ['Customer service', 'Sales', 'Operations & logistics', 'Other']
+          : /tutor|education|coworking|hotel|repair|service/.test(normalizedBusiness)
+            ? ['Customer service', 'Operations & logistics', 'Management', 'Sales']
+            : ['Customer service', 'Operations & logistics', 'Sales', 'Other'];
     const roles = cityDataItem.topRoles.slice().sort((a, b) => {
       const ai = priorities.indexOf(a.name), bi = priorities.indexOf(b.name);
       return (ai < 0 ? 50 : ai) - (bi < 0 ? 50 : bi) || b.count - a.count;
@@ -250,7 +295,8 @@
       if (!batch || !window.confirm(`Remove “${batch.name}” and its imported rows from the local database?`)) return;
       try {
         await api(`/api/v1/data-sources/${batch.id}`, { method: 'DELETE' });
-        await Promise.all([refreshSources(), refreshCoverage(), refreshDashboard()]);
+        await refreshMarkets();
+        await Promise.all([refreshAreas(), refreshSources(), refreshCoverage(), refreshDashboard()]);
         toast('Imported dataset removed');
       } catch (error) { toast(error.message); }
     }));
@@ -443,22 +489,151 @@
     localStorage.setItem('spotwise-scenario', JSON.stringify({ rent, staff, pay, other, ticket, margin: margin * 100, customers }));
   }
 
-  $('#importForm').addEventListener('submit', async (event) => {
-    event.preventDefault();
+  const importForm = $('#importForm');
+  const importButton = $('#importButton');
+  let uploadScanVersion = 0;
+  let uploadReady = false;
+
+  function csvRecords(text, visit) {
+    const firstLine = text.slice(0, 4096).split(/\r?\n/, 1)[0] || '';
+    const delimiters = [',', ';', '\t', '|'];
+    const delimiter = delimiters.sort((a, b) => firstLine.split(b).length - firstLine.split(a).length)[0];
+    let row = [], field = '', quoted = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (quoted) {
+        if (char === '"' && text[index + 1] === '"') { field += '"'; index += 1; }
+        else if (char === '"') quoted = false;
+        else field += char;
+      } else if (char === '"' && field.length === 0) quoted = true;
+      else if (char === delimiter) { row.push(field); field = ''; }
+      else if (char === '\n' || char === '\r') {
+        if (char === '\r' && text[index + 1] === '\n') index += 1;
+        row.push(field); field = '';
+        if (row.some((cell) => cell.trim())) visit(row);
+        row = [];
+      } else field += char;
+    }
+    if (field.length || row.length) { row.push(field); if (row.some((cell) => cell.trim())) visit(row); }
+  }
+
+  async function scanUpload() {
+    const version = ++uploadScanVersion;
+    const file = importForm.elements.file.files?.[0];
+    const preview = $('#filePreview');
     const message = $('#importMessage');
-    const button = $('#importButton');
-    button.disabled = true;
-    button.innerHTML = 'Importing rows…';
-    message.textContent = 'The file will be parsed into normalized local records; its raw contents will not be retained.';
+    uploadReady = false;
+    importButton.disabled = true;
+    if (!file) { preview.hidden = true; message.textContent = ''; importButton.textContent = 'Choose a file to scan ↥'; return; }
+    preview.hidden = false;
+    preview.textContent = `Scanning ${file.name} · ${Math.max(1, Math.ceil(file.size / 1024))} KB…`;
+    message.textContent = 'Checking the header, required fields, values, dates, coordinates, row count, and duplicate rows.';
+    if (file.size > 20 * 1024 * 1024) {
+      preview.innerHTML = '<b>File is too large.</b> Choose a CSV file under 20 MB.';
+      message.textContent = '';
+      importButton.textContent = 'File too large';
+      return;
+    }
     try {
-      const form = new FormData(event.currentTarget);
+      const text = (await file.text()).replace(/^\uFEFF/, '');
+      if (version !== uploadScanVersion) return;
+      const category = importForm.elements.category.value;
+      const skipDuplicates = importForm.elements.skip_duplicates.checked;
+      const normalizeLabels = importForm.elements.normalize_labels.checked;
+      const aliases = {
+        city: ['city', 'market', 'cityname', 'city_name'], area: ['area', 'locality', 'neighborhood', 'neighbourhood', 'district'],
+        value: ['value', 'count', 'amount', 'visitors', 'vehicles', 'speed', 'available_spaces', 'salary', 'rent', 'cost'],
+        metric: ['metric', 'measure', 'field', 'signal'], observed: ['observed_at', 'timestamp', 'datetime', 'date'],
+        lat: ['latitude', 'lat'], lon: ['longitude', 'lon', 'lng'], unit: ['unit', 'units', 'measurement_unit'],
+        name: ['name', 'business_name', 'station_name', 'label'],
+      };
+      const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const headKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      let headers = null, scanned = 0, invalid = 0, duplicates = 0, geocoded = 0, timed = 0;
+      const seen = new Set(), sample = [], errors = [];
+      const clean = (value) => normalizeLabels ? norm(value) : String(value || '').trim();
+      csvRecords(text, (cells) => {
+        if (!headers) { headers = cells.map(headKey); return; }
+        scanned += 1;
+        if (scanned > 100000) return;
+        const values = Object.fromEntries(headers.map((key, index) => [key, cells[index] || '']));
+        const pick = (key) => (aliases[key] || []).map(headKey).map((alias) => values[alias]).find((value) => value != null && String(value).trim() !== '') || '';
+        const city = clean(pick('city'));
+        const area = clean(pick('area')) || 'Citywide';
+        let rawValue = pick('value');
+        if (!rawValue && ['competition', 'transit'].includes(category)) rawValue = '1';
+        const numericValue = Number(String(rawValue).replace(/,/g, '').trim());
+        const latitude = pick('lat'), longitude = pick('lon');
+        const date = pick('observed');
+        let issue = '';
+        if (!city) issue = 'missing city';
+        else if (!rawValue || !Number.isFinite(numericValue) || numericValue < 0) issue = 'value must be a non-negative number';
+        else if ((Boolean(latitude) !== Boolean(longitude)) || (latitude && (!Number.isFinite(Number(latitude)) || Number(latitude) < -90 || Number(latitude) > 90)) || (longitude && (!Number.isFinite(Number(longitude)) || Number(longitude) < -180 || Number(longitude) > 180))) issue = 'coordinates must be a valid latitude/longitude pair';
+        else if (date && Number.isNaN(Date.parse(date))) issue = 'date must be a readable ISO date/time';
+        if (issue) { invalid += 1; if (errors.length < 3) errors.push(issue); return; }
+        const key = JSON.stringify([city.toLowerCase(), area.toLowerCase(), category, clean(pick('metric')).toLowerCase() || category, numericValue, clean(pick('unit')).toLowerCase(), clean(pick('name')).toLowerCase(), date, latitude, longitude]);
+        if (skipDuplicates && seen.has(key)) { duplicates += 1; return; }
+        seen.add(key);
+        if (latitude && longitude) geocoded += 1;
+        if (date) timed += 1;
+        if (sample.length < 4) sample.push([city, area, clean(pick('metric')) || category, numericValue, clean(pick('unit')) || 'count']);
+      });
+      if (version !== uploadScanVersion) return;
+      const hasCity = headers?.some((header) => aliases.city.map(headKey).includes(header));
+      const hasValue = headers?.some((header) => aliases.value.map(headKey).includes(header));
+      const valueMayDefault = ['competition', 'transit'].includes(category);
+      const blocking = !headers || !hasCity || (!hasValue && !valueMayDefault) || scanned === 0 || scanned > 100000 || sample.length === 0;
+      const cleanCount = Math.max(0, scanned - invalid - duplicates);
+      uploadReady = !blocking;
+      importButton.disabled = blocking;
+      importButton.innerHTML = blocking ? 'Fix scan issues to import <span>↥</span>' : `Import ${number(cleanCount)} clean row${cleanCount === 1 ? '' : 's'} <span>↥</span>`;
+      const report = [];
+      if (!headers) report.push('<span class="preview-warn">No readable CSV header was found.</span>');
+      if (headers && !hasCity) report.push('<span class="preview-warn">Add a city column (city, market, or city_name).</span>');
+      if (headers && !hasValue && !valueMayDefault) report.push('<span class="preview-warn">Add a numeric value/count column.</span>');
+      if (scanned > 100000) report.push('<span class="preview-warn">The file is over the 100,000 row limit.</span>');
+      if (invalid) report.push(`<span class="preview-warn">${number(invalid)} row(s) will be skipped: ${escapeHtml(errors.join('; '))}.</span>`);
+      if (duplicates) report.push(`<span>${number(duplicates)} exact duplicate row(s) will be removed.</span>`);
+      if (geocoded) report.push(`${number(geocoded)} row(s) have coordinates.`);
+      if (timed) report.push(`${number(timed)} row(s) have timestamps for peak-hour analysis.`);
+      const table = sample.length ? `<table><thead><tr><th>City</th><th>Area</th><th>Metric</th><th>Value</th><th>Unit</th></tr></thead><tbody>${sample.map((cells) => `<tr>${cells.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '';
+      preview.innerHTML = `<b>${number(scanned)} rows scanned</b> · ${number(Math.max(0, scanned - invalid - duplicates))} clean rows · ${number(invalid)} invalid · ${number(duplicates)} duplicates ${report.length ? `<div>${report.join('<br>')}</div>` : ''}${table}`;
+      message.textContent = uploadReady ? 'Review the sample and scan summary, then import. The server validates every row again before saving.' : 'Fix the scan issue above, then choose the file again.';
+    } catch (error) {
+      if (version !== uploadScanVersion) return;
+      preview.innerHTML = `<b>Could not scan file.</b> ${escapeHtml(error.message)}`;
+      importButton.textContent = 'Choose a readable CSV';
+      message.textContent = '';
+    }
+  }
+
+  importForm.elements.file.addEventListener('change', scanUpload);
+  importForm.elements.category.addEventListener('change', () => { if (importForm.elements.file.files?.[0]) scanUpload(); });
+  importForm.elements.skip_duplicates.addEventListener('change', () => { if (importForm.elements.file.files?.[0]) scanUpload(); });
+  importForm.elements.normalize_labels.addEventListener('change', () => { if (importForm.elements.file.files?.[0]) scanUpload(); });
+
+  importForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!uploadReady) { toast('Scan a valid CSV before importing'); return; }
+    const formElement = event.currentTarget;
+    const message = $('#importMessage');
+    importButton.disabled = true;
+    importButton.innerHTML = 'Validating and importing…';
+    message.textContent = 'The backend is validating the rows again before adding normalized records to your local database.';
+    try {
+      const form = new FormData(formElement);
       const result = await api('/api/v1/datasets/import', { method: 'POST', body: form });
-      message.textContent = `${result.name}: ${number(result.row_count)} rows imported. ${result.warnings.join(' ')}`;
-      event.currentTarget.reset();
+      message.textContent = `${result.name}: ${number(result.row_count)} imported from ${number(result.scanned_rows)} scanned; ${number(result.skipped_invalid_rows)} invalid and ${number(result.duplicates_removed)} duplicate rows removed. Range ${number(result.minimum_value, 1)}–${number(result.maximum_value, 1)}, median ${number(result.median_value, 1)}. ${result.warnings.join(' ')}`;
+      formElement.reset();
+      $('#filePreview').hidden = true;
+      uploadReady = false;
+      importButton.disabled = true;
+      importButton.textContent = 'Choose a file to scan ↥';
+      await refreshMarkets();
       await Promise.all([refreshAreas(), refreshDashboard(), refreshSources(), refreshCoverage()]);
       toast('Dataset imported and analyzed');
     } catch (error) { message.textContent = error.message; }
-    finally { button.disabled = false; button.innerHTML = 'Import and analyze <span>↥</span>'; }
+    finally { if (uploadReady) importButton.disabled = false; }
   });
 
   $('#exportButton').addEventListener('click', () => {
