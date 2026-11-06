@@ -8,8 +8,9 @@ import re
 import posixpath
 import zipfile
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
 
 import pyarrow.parquet as parquet
@@ -19,6 +20,17 @@ from .models import Observation
 XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 XLSX_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+METRO_BOUNDS = {
+    # Generous metro-region bounds used when a country-wide GTFS feed is imported.
+    "ahmedabad": (71.7, 22.0, 73.4, 23.8),
+    "bengaluru": (77.0, 12.3, 78.5, 13.8),
+    "chennai": (79.5, 12.4, 81.0, 13.8),
+    "delhi ncr": (75.8, 27.0, 78.8, 30.0),
+    "hyderabad": (77.2, 16.3, 79.5, 18.5),
+    "kolkata": (87.0, 21.8, 89.5, 23.8),
+    "mumbai": (72.1, 17.8, 74.0, 20.8),
+    "pune": (72.8, 17.7, 74.5, 19.3),
+}
 
 
 def _xlsx_rows(content: bytes, max_rows: int) -> list[dict]:
@@ -114,7 +126,133 @@ def _rows_from_records(records: object) -> list[dict]:
     return records
 
 
-def read_rows(filename: str, content: bytes, max_rows: int) -> list[dict]:
+def _gtfs_rows(content: bytes, max_rows: int, city: str | None) -> list[dict]:
+    """Turn a static GTFS ZIP into geocoded transit-stop signal rows."""
+    if not city or not city.strip():
+        raise ValueError("For a GTFS ZIP, choose the city/market in the import form first.")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("This is not a valid ZIP archive. Choose a static GTFS .zip feed.") from exc
+    with archive:
+        files = {}
+        expanded_size = 0
+        for info in archive.infolist():
+            expanded_size += info.file_size
+            if info.file_size < 0 or expanded_size > 512 * 1024 * 1024:
+                raise ValueError("GTFS ZIP expands beyond the 512 MB safety limit.")
+            if info.is_dir():
+                continue
+            base = Path(info.filename).name.casefold()
+            if base in {"stops.txt", "routes.txt", "trips.txt", "stop_times.txt", "calendar.txt", "calendar_dates.txt", "feed_info.txt"}:
+                files[base] = info
+        if "stops.txt" not in files:
+            raise ValueError("GTFS ZIP must contain stops.txt. Upload a static GTFS schedule feed, not GTFS-Realtime.")
+        if "routes.txt" not in files or "trips.txt" not in files or "stop_times.txt" not in files:
+            raise ValueError("GTFS ZIP needs routes.txt, trips.txt and stop_times.txt to calculate routes serving each stop.")
+
+        def rows(filename: str):
+            with archive.open(files[filename]) as binary:
+                wrapper = io.TextIOWrapper(binary, encoding="utf-8-sig", newline="")
+                yield from csv.DictReader(wrapper)
+
+        route_modes = {}
+        for row in rows("routes.txt"):
+            route_id = row.get("route_id", "").strip()
+            if route_id:
+                route_type = row.get("route_type", "").strip()
+                basic_modes = {
+                    "0": "tram", "1": "metro", "2": "rail", "3": "bus", "4": "ferry",
+                    "5": "cable tram", "6": "gondola", "7": "funicular", "11": "trolleybus", "12": "monorail",
+                }
+                if route_type.isdigit() and 100 <= int(route_type) < 200:
+                    mode = "rail"
+                elif route_type.isdigit() and 400 <= int(route_type) < 500:
+                    mode = "metro"
+                elif route_type.isdigit() and 700 <= int(route_type) < 800:
+                    mode = "bus"
+                elif route_type.isdigit() and 1000 <= int(route_type) < 1100:
+                    mode = "ferry"
+                else:
+                    mode = basic_modes.get(route_type, "transit")
+                route_modes[route_id] = mode
+        active_services = set()
+        base_calendar = {}
+        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        dates = [today + timedelta(days=offset) for offset in range(7)]
+        if "calendar.txt" in files:
+            weekdays = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+            for row in rows("calendar.txt"):
+                try:
+                    start = datetime.strptime(row.get("start_date", ""), "%Y%m%d").date()
+                    end = datetime.strptime(row.get("end_date", ""), "%Y%m%d").date()
+                except ValueError:
+                    continue
+                base_calendar[row.get("service_id", "").strip()] = (start, end, row)
+        exceptions = {}
+        if "calendar_dates.txt" in files:
+            for row in rows("calendar_dates.txt"):
+                try:
+                    exception_date = datetime.strptime(row.get("date", ""), "%Y%m%d").date()
+                except ValueError:
+                    continue
+                if today <= exception_date < today + timedelta(days=7):
+                    exceptions[(row.get("service_id", "").strip(), exception_date)] = row.get("exception_type", "").strip()
+        if "calendar.txt" in files or "calendar_dates.txt" in files:
+            for service_id in set(base_calendar) | {service for service, _day in exceptions}:
+                start_end_row = base_calendar.get(service_id)
+                for day in dates:
+                    base_active = bool(start_end_row and start_end_row[0] <= day <= start_end_row[1] and start_end_row[2].get(weekdays[day.weekday()], "0") == "1")
+                    exception = exceptions.get((service_id, day))
+                    if exception == "1" or (exception != "2" and base_active):
+                        active_services.add(service_id)
+                        break
+        has_calendar = "calendar.txt" in files or "calendar_dates.txt" in files
+        if has_calendar and not active_services:
+            raise ValueError("This GTFS feed has no scheduled services active in the next 7 days; choose a current feed.")
+        apply_calendar = has_calendar
+        trip_routes = {}
+        for row in rows("trips.txt"):
+            trip_id, route_id = row.get("trip_id", "").strip(), row.get("route_id", "").strip()
+            service_id = row.get("service_id", "").strip()
+            if trip_id and route_id in route_modes and (not apply_calendar or service_id in active_services):
+                trip_routes[trip_id] = route_id
+        served_routes: dict[str, set[str]] = {}
+        for row in rows("stop_times.txt"):
+            stop_id = row.get("stop_id", "").strip()
+            route_id = trip_routes.get(row.get("trip_id", "").strip())
+            if stop_id and route_id:
+                served_routes.setdefault(stop_id, set()).add(route_id)
+
+        output = []
+        for row in rows("stops.txt"):
+            stop_id = row.get("stop_id", "").strip()
+            routes = served_routes.get(stop_id, set())
+            if not stop_id or not routes:
+                continue
+            try:
+                latitude, longitude = float(row.get("stop_lat", "")), float(row.get("stop_lon", ""))
+            except (ValueError, TypeError):
+                continue
+            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                continue
+            bounds = METRO_BOUNDS.get(city.strip().casefold())
+            if bounds and not (bounds[0] <= longitude <= bounds[2] and bounds[1] <= latitude <= bounds[3]):
+                continue
+            if len(output) >= max_rows:
+                raise OverflowError(f"The GTFS feed contains more than {max_rows:,} usable stops.")
+            modes = sorted({route_modes[route] for route in routes})
+            output.append({
+                "city": city.strip(), "area": "Citywide", "metric": "routes_serving_stop", "value": len(routes),
+                "unit": "routes", "name": row.get("stop_name", "").strip() or stop_id,
+                "category_label": ", ".join(modes), "latitude": latitude, "longitude": longitude,
+            })
+        if not output:
+            raise ValueError("No geocoded stops with scheduled routes were found in this GTFS feed.")
+        return output
+
+
+def read_rows(filename: str, content: bytes, max_rows: int, city: str | None = None) -> list[dict]:
     extension = Path(filename).suffix.casefold()
     if extension == ".csv":
         text = content.decode("utf-8-sig")
@@ -163,7 +301,10 @@ def read_rows(filename: str, content: bytes, max_rows: int) -> list[dict]:
             raise OverflowError(f"The file exceeds the {max_rows:,} row limit.")
         return parquet_file.read().to_pylist()
 
-    raise ValueError("Supported file types are CSV, XLSX, JSON, JSONL/NDJSON, and Parquet.")
+    if extension == ".zip":
+        return _gtfs_rows(content, max_rows, city)
+
+    raise ValueError("Supported file types are CSV, XLSX, JSON, JSONL/NDJSON, Parquet, and static GTFS ZIP (transit category only).")
 
 
 def _value(row: dict, *keys: str) -> str:

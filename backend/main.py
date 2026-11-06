@@ -16,8 +16,9 @@ from .db import Base, ROOT, engine, get_session
 from .models import Observation, SignalBatch, Study, utc_now
 from .salary_model import estimate_salary
 from .schemas import DatasetImportResult, DatasetPreview, SalaryEstimateRequest, StudyComparison, StudyCreate, StudyUpdate
+from .transit_sources import sources_for_city
 
-MAX_UPLOAD_BYTES = int(os.getenv("SPOTWISE_MAX_UPLOAD_MB", "20")) * 1024 * 1024
+MAX_UPLOAD_BYTES = int(os.getenv("SPOTWISE_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 MAX_UPLOAD_ROWS = int(os.getenv("SPOTWISE_MAX_UPLOAD_ROWS", "100000"))
 ALLOWED_CATEGORIES = {
     "footfall", "competition", "traffic", "parking", "transit",
@@ -144,6 +145,7 @@ def dashboard(
         "selected_area": area,
         "market_context": market_context(data, city),
         "uploaded_signals": summarize_signals(session, city, area),
+        "transit_sources": sources_for_city(city),
         "study_count": session.scalar(select(func.count(Study.id))) or 0,
         "dataset_count": session.scalar(select(func.count(SignalBatch.id))) or 0,
     }
@@ -169,9 +171,11 @@ def data_sources(session: Session = Depends(get_session), data: dict = Depends(g
     return {"kaggle_sources": data.get("sources", []), "uploaded_sources": [as_public_batch(item) for item in uploaded]}
 
 
-def _read_and_clean_upload(category: str, filename: str, content: bytes, skip_duplicates: bool, normalize_labels: bool) -> dict:
+def _read_and_clean_upload(category: str, filename: str, content: bytes, skip_duplicates: bool, normalize_labels: bool, dataset_city: str | None = None) -> dict:
     try:
-        rows = read_rows(filename, content, MAX_UPLOAD_ROWS)
+        if Path(filename).suffix.casefold() == ".zip" and category != "transit":
+            raise ValueError("Static GTFS ZIP files can only be imported as Public transport signals.")
+        rows = read_rows(filename, content, MAX_UPLOAD_ROWS, dataset_city)
         return normalize_rows(rows, category, skip_duplicates, normalize_labels, MAX_UPLOAD_ROWS)
     except OverflowError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
@@ -206,13 +210,14 @@ async def _read_upload_file(file: UploadFile) -> tuple[str, bytes]:
 @app.post("/api/v1/datasets/preview", response_model=DatasetPreview, tags=["datasets"])
 async def preview_dataset(
     category: str = Form(...),
+    dataset_city: str = Form(default="", max_length=90),
     skip_duplicates: bool = Form(default=True),
     normalize_labels: bool = Form(default=True),
     file: UploadFile = File(...),
 ):
     category = _validate_import_category(category)
     filename, content = await _read_upload_file(file)
-    scan = _read_and_clean_upload(category, filename, content, skip_duplicates, normalize_labels)
+    scan = _read_and_clean_upload(category, filename, content, skip_duplicates, normalize_labels, dataset_city)
     return DatasetPreview(
         filename=filename, format=Path(filename).suffix.lstrip(".").upper(),
         **{key: scan[key] for key in ("scanned_rows", "clean_rows", "skipped_invalid_rows", "duplicates_removed", "geocoded_rows", "timestamped_rows", "minimum_value", "median_value", "maximum_value", "errors", "sample_rows")},
@@ -224,6 +229,7 @@ async def import_dataset(
     category: str = Form(...),
     name: str = Form(..., min_length=2, max_length=120),
     source: str = Form(default="User supplied dataset", max_length=240),
+    dataset_city: str = Form(default="", max_length=90),
     skip_duplicates: bool = Form(default=True),
     normalize_labels: bool = Form(default=True),
     file: UploadFile = File(...),
@@ -231,7 +237,7 @@ async def import_dataset(
 ):
     category = _validate_import_category(category)
     filename, content = await _read_upload_file(file)
-    scan = _read_and_clean_upload(category, filename, content, skip_duplicates, normalize_labels)
+    scan = _read_and_clean_upload(category, filename, content, skip_duplicates, normalize_labels, dataset_city)
     observations = scan["observations"]
     errors = scan["errors"]
     duplicates = scan["duplicates_removed"]
@@ -257,6 +263,11 @@ async def import_dataset(
         geocoded_rows=scan["geocoded_rows"], timestamped_rows=scan["timestamped_rows"],
         minimum_value=scan["minimum_value"], median_value=scan["median_value"], maximum_value=scan["maximum_value"],
     )
+
+
+@app.get("/api/v1/transport-sources", tags=["datasets"])
+def transport_sources(city: str = Query(min_length=2, max_length=90)):
+    return {"city": city, "feeds": sources_for_city(city)}
 
 @app.delete("/api/v1/data-sources/{batch_id}", tags=["datasets"])
 def delete_dataset(batch_id: int, session: Session = Depends(get_session)):
@@ -347,25 +358,76 @@ def compare_studies(body: StudyComparison, session: Session = Depends(get_sessio
 
 
 @app.get("/api/v1/coverage", tags=["analysis"])
-def coverage(session: Session = Depends(get_session), data: dict = Depends(get_data)):
-    categories = {row[0] for row in session.execute(select(SignalBatch.category).distinct())}
+def coverage(city: str = Query(default="Mumbai", min_length=1, max_length=90), session: Session = Depends(get_session), data: dict = Depends(get_data)):
+    # A category uploaded for a different city must never make this city's card appear covered.
+    source_options = {
+        "Commercial rent": ("Commercial property research and commercial lease benchmarks", "https://www.iimb.ac.in/reri/", "Office lease indices can provide broad context; they are not current neighborhood retail asking rents."),
+        "Footfall": ("City mobility data portals and licensed pedestrian counts", "https://delhi.transportstack.in/data-services", "Some city feeds expose station or hourly counts with approval. No free, current neighborhood-wide feed was verified for all selected cities."),
+        "Business competition": ("Overture Maps Places", "https://docs.overturemaps.org/guides/places/", "Global geocoded place listings, released monthly. Filter and deduplicate; listings are not a complete or verified live competitor census."),
+        "Road traffic": ("IUDX and city open-data traffic feeds", "https://catalogue.iudx.org.in/", "Catalogues include city traffic resources; data availability, freshness, and access differ by city."),
+        "Parking availability": ("IUDX Smart Parking and city mobility feeds", "https://iudx.org.in/cities/", "Some cities publish parking locations or occupancy. Live availability is city-specific and may require access."),
+        "Local transit access": ("City-specific GTFS and mobility feeds", "https://mobilitydatabase.org/feeds?q=india", "Choose the selected city's current feed below; schedule feeds describe published service, not live vehicles."),
+        "Operating costs and profit": ("MoSPI Consumer Price Index", "https://cpi.mospi.gov.in/", "Monthly consumer price indices give broad inflation/cost context, not business-specific costs or profit. Scenario inputs remain user assumptions."),
+        "Worker availability": ("PLFS and city labor datasets", "https://microdata.gov.in/", "Official labor statistics are useful at broader geographies; local worker availability requires more granular data."),
+        "Local wage signals": ("SpotWise job-posting benchmark and official labor statistics", "https://microdata.gov.in/", "Job postings are not verified wages or available workers; imported city and role coverage is required."),
+        "Cost of living": ("MoSPI CPI and Household Consumption Expenditure Survey", "https://www.mospi.gov.in/", "Official indicators provide broad household context, not neighborhood-specific business operating costs."),
+    }
+    category_by_name = {
+        "Footfall": "footfall", "Business competition": "competition", "Road traffic": "traffic", "Parking availability": "parking",
+        "Commercial rent": "rent", "Local transit access": "transit", "Worker availability": "worker_supply",
+        "Local wage signals": "salary", "Cost of living": "cost_of_living",
+    }
+    entries = list(data.get("coverageGaps", [])) + [
+        {"name": "Worker availability", "status": "Missing", "need": "City-specific worker supply data; job postings are not worker counts"},
+        {"name": "Local wage signals", "status": "Missing", "need": "Recent local wages matched to the role and monthly/annual units"},
+        {"name": "Cost of living", "status": "Missing", "need": "Current local prices; CPI is broad context rather than a neighborhood measure"},
+    ]
     items = []
-    for entry in data.get("coverageGaps", []):
-        match = {
-            "Footfall": "footfall", "Business competition": "competition", "Road traffic": "traffic", "Parking availability": "parking",
-            "Commercial rent": "rent", "Local transit access": "transit", "Operating costs and profit": None,
-        }.get(entry["name"])
-        if match and match in categories:
-            items.append({**entry, "status": "Imported data"})
-        else:
-            items.append(entry)
-    if "worker_supply" in categories:
-        items.append({"name": "Worker availability", "status": "Imported data", "need": "Validate the uploaded worker source, coverage, and collection date"})
-    if "salary" in categories:
-        items.append({"name": "Local wage signals", "status": "Imported data", "need": "Confirm role match and salary units before comparing"})
-    if "cost_of_living" in categories:
-        items.append({"name": "Cost of living", "status": "Imported data", "need": "Check local coverage, period, and household/business relevance"})
-    return {"items": items, "imported_categories": sorted(categories)}
+    imported_categories = set()
+    for entry in entries:
+        name = entry["name"]
+        category = category_by_name.get(name)
+        records = 0
+        area_records = 0
+        if category:
+            records = session.scalar(select(func.count(Observation.id)).where(
+                Observation.category == category, func.lower(Observation.city) == city.strip().lower()
+            )) or 0
+            area_records = session.scalar(select(func.count(Observation.id)).where(
+                Observation.category == category, func.lower(Observation.city) == city.strip().lower(),
+                Observation.area != "Citywide"
+            )) or 0
+        source_name, source_url, source_note = source_options[name]
+        if name == "Local transit access":
+            city_feeds = sources_for_city(city)
+            imported_batches = list(session.scalars(
+                select(SignalBatch).join(Observation).where(
+                    Observation.category == "transit", func.lower(Observation.city) == city.strip().lower()
+                ).distinct().order_by(SignalBatch.imported_at.desc())
+            ))
+            selected_feed = None
+            if imported_batches:
+                for batch in imported_batches:
+                    selected_feed = next((feed for feed in city_feeds if any(
+                        part.casefold() in batch.name.casefold()
+                        for part in feed["name"].replace("·", " ").split()
+                        if len(part) > 3 and part.casefold() not in {"gtfs", "schedule", "current", "feed", "transit"}
+                    )), None)
+                    if selected_feed:
+                        break
+            selected_feed = selected_feed or next((feed for feed in city_feeds if feed["kind"].startswith("GTFS")), city_feeds[0])
+            source_name, source_url = selected_feed["name"], selected_feed["url"]
+            source_note = f"{selected_feed['freshness']} {selected_feed['provenance']}"
+            if imported_batches:
+                source_note += f" Imported in SpotWise: {', '.join(batch.name for batch in imported_batches[:2])}."
+        status = "Local data" if records else entry.get("status", "Missing")
+        if records:
+            imported_categories.add(category)
+        items.append({
+            **entry, "status": status, "source_name": source_name, "source_url": source_url,
+            "source_note": source_note, "record_count": records, "area_record_count": area_records,
+        })
+    return {"city": city, "items": items, "imported_categories": sorted(imported_categories)}
 
 
 @app.get("/", include_in_schema=False)

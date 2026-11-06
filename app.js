@@ -65,8 +65,29 @@
         renderAreaSuggestions();
         hideAreaSuggestions();
         updateSelectionSummary();
+        updateWorkspaceMarket();
         await refreshAreas();
         await refreshDashboard();
+        await refreshCoverage();
+      });
+      $('#workspaceMarket').addEventListener('click', () => {
+        const picker = $('#workspaceMarketPicker');
+        picker.hidden = !picker.hidden;
+        $('#workspaceMarket').setAttribute('aria-expanded', String(!picker.hidden));
+      });
+      $('#workspaceMarketPicker').addEventListener('click', (event) => {
+        const option = event.target.closest('[data-market]');
+        if (!option) return;
+        const market = $('#citySelect');
+        market.value = option.dataset.market;
+        market.dispatchEvent(new Event('change', { bubbles: true }));
+        $('#workspaceMarketPicker').hidden = true;
+        $('#workspaceMarket').setAttribute('aria-expanded', 'false');
+      });
+      document.addEventListener('click', (event) => {
+        if (event.target.closest('.workspace-picker-wrap')) return;
+        $('#workspaceMarketPicker').hidden = true;
+        $('#workspaceMarket').setAttribute('aria-expanded', 'false');
       });
       $('#areaSelect').addEventListener('change', () => { clearActiveStudy(); updateSelectionSummary(); refreshDashboard(); });
       $('#areaSelect').addEventListener('keydown', (event) => {
@@ -102,6 +123,10 @@
       return `<option value="${escapeHtml(city)}">${escapeHtml(city)} · ${escapeHtml(shortLabels.join(' · ') || 'local data')}</option>`;
     }).join('');
     $('#citySelect').value = result.markets.includes(previousCity) ? previousCity : result.markets.includes('Mumbai') ? 'Mumbai' : result.markets[0];
+    $('#datasetCitySelect').innerHTML = result.markets.map((city) => `<option value="${escapeHtml(city)}">${escapeHtml(city)}</option>`).join('');
+    $('#datasetCitySelect').value = result.markets.includes($('#citySelect').value) ? $('#citySelect').value : result.markets[0];
+    $('#workspaceMarketPicker').innerHTML = result.markets.map((city) => `<button class="workspace-option" type="button" role="option" data-market="${escapeHtml(city)}" aria-selected="${city === $('#citySelect').value}">${escapeHtml(city)}<span>${city === $('#citySelect').value ? '✓' : ''}</span></button>`).join('');
+    updateWorkspaceMarket();
     const datasetTypes = new Set(result.dataset_business_types || []);
     const common = result.business_types.filter((business) => !datasetTypes.has(business));
     const imported = result.business_types.filter((business) => datasetTypes.has(business));
@@ -109,6 +134,16 @@
     const allBusinesses = [...common, ...imported];
     $('#businessSelect').value = allBusinesses.includes(previousBusiness) ? previousBusiness : common[0];
     updateSelectionSummary();
+  }
+
+  function updateWorkspaceMarket() {
+    const city = $('#citySelect')?.value;
+    $('#workspaceMarketLabel').textContent = city ? `${city} · Market workspace` : 'Market workspace';
+    document.querySelectorAll('.workspace-option').forEach((option) => {
+      const selected = option.dataset.market === city;
+      option.setAttribute('aria-selected', String(selected));
+      option.querySelector('span').textContent = selected ? '✓' : '';
+    });
   }
 
   function updateSelectionSummary() {
@@ -202,7 +237,7 @@
       : `No rental observations for ${city} are included. Replace the starting value with a current commercial rent quote.`;
     renderRents(data.rentals);
     renderWorkforce(cityData(data, city), $('#businessSelect').value);
-    renderMobility(city, railData(data, city));
+    renderMobility(city, railData(data, city), response.transit_sources || []);
     renderSignals(response.uploaded_signals, area);
     updateScenario();
   }
@@ -277,11 +312,23 @@
     $('#skillCloud').innerHTML = cityDataItem.topSkills.slice(0, 8).map((item) => `<span class="skill-tag">${escapeHtml(item.name)} <b>${number(item.count)}</b></span>`).join('') || '<span class="skill-tag">No skill tags in this market</span>';
   }
 
-  function renderMobility(city, mobility) {
+  function renderMobility(city, mobility, feeds = []) {
     $('#mobilityTitle').textContent = `${city} · rail service records`;
     $('#stationCount').textContent = number(mobility?.stationCount ?? 0);
     $('#trainCount').textContent = number(mobility?.trainCount ?? 0);
     $('#cityRailRecords').textContent = number(mobility?.scheduleRowCount ?? 0);
+    $('#transitFeedCity').textContent = `${city} · current transport sources`;
+    $('#transitFeedGrid').innerHTML = feeds.map((feed, index) => `<article class="transit-feed-card"><div class="transit-feed-top"><b>${escapeHtml(feed.name)}</b><span>${escapeHtml(feed.mode)}</span></div><small>${escapeHtml(feed.kind)} · ${escapeHtml(feed.freshness)}</small><p>${escapeHtml(feed.provenance)}</p><div class="transit-feed-actions"><a href="${escapeHtml(feed.url)}" target="_blank" rel="noreferrer">View source ↗</a><button type="button" data-feed-index="${index}">Use in model ↓</button></div></article>`).join('') || '<div class="empty-card">No feed links found for this market. Search the Mobility Database catalogue and check the feed dates.</div>';
+    $('#transitFeedGrid').querySelectorAll('[data-feed-index]').forEach((button) => button.addEventListener('click', () => {
+      const feed = feeds[Number(button.dataset.feedIndex)];
+      importForm.elements.category.value = 'transit';
+      importForm.elements.dataset_city.value = city;
+      importForm.elements.name.value = `${city} ${feed.name}`.slice(0, 120);
+      importForm.elements.source.value = feed.url;
+      updateGtfsInputs();
+      $('#datasetImporter').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      toast('Download the feed ZIP, then select it below');
+    }));
   }
 
   function renderSignals(signals, area) {
@@ -307,11 +354,13 @@
 
   async function refreshCoverage() {
     try {
-      const response = await api('/api/v1/coverage');
+      const city = $('#citySelect').value || 'Mumbai';
+      const response = await api(`/api/v1/coverage?city=${encodeURIComponent(city)}`);
       $('#coverageGrid').innerHTML = response.items.map((item) => {
         const status = item.status.toLowerCase();
-        const klass = status.includes('partial') ? 'partial' : status.includes('scenario') ? 'scenario' : status.includes('imported') ? 'imported' : '';
-        return `<article class="coverage-item"><div class="coverage-top"><b>${escapeHtml(item.name)}</b><span class="coverage-state ${klass}">${escapeHtml(item.status.toUpperCase())}</span></div><p>${escapeHtml(item.need)}</p></article>`;
+        const klass = status.includes('partial') ? 'partial' : status.includes('scenario') ? 'scenario' : status.includes('local data') ? 'imported' : '';
+        const recordInfo = item.record_count ? `<small class="coverage-records">${number(item.record_count)} records${item.area_record_count ? ` · ${number(item.area_record_count)} area-level` : ' · citywide'}</small>` : '';
+        return `<article class="coverage-item"><div class="coverage-top"><b>${escapeHtml(item.name)}</b><span class="coverage-source-state">SOURCE FOUND</span></div><div class="coverage-status-row"><span class="coverage-state ${klass}">${escapeHtml(item.status.toUpperCase())}</span>${recordInfo}</div><p>${escapeHtml(item.need)}</p><a class="coverage-source-link" href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.source_name)} ↗</a><small class="coverage-source-note">${escapeHtml(item.source_note)}</small></article>`;
       }).join('');
     } catch (error) { $('#coverageGrid').innerHTML = `<div class="empty-card">${escapeHtml(error.message)}</div>`; }
   }
@@ -543,6 +592,15 @@
   let uploadScanVersion = 0;
   let uploadReady = false;
 
+  function updateGtfsInputs() {
+    const file = importForm.elements.file.files?.[0];
+    const isGtfs = file?.name.toLowerCase().endsWith('.zip');
+    $('#gtfsCityField').hidden = !isGtfs;
+    importForm.elements.dataset_city.required = Boolean(isGtfs);
+    if (isGtfs) importForm.elements.category.value = 'transit';
+    if (!importForm.elements.dataset_city.value) importForm.elements.dataset_city.value = $('#citySelect').value;
+  }
+
   async function scanUpload() {
     const version = ++uploadScanVersion;
     const file = importForm.elements.file.files?.[0];
@@ -554,8 +612,8 @@
     preview.hidden = false;
     preview.textContent = `Scanning ${file.name} · ${Math.max(1, Math.ceil(file.size / 1024))} KB…`;
     message.textContent = 'The server is checking file structure, required fields, values, dates, coordinates, duplicates, and row limits.';
-    if (file.size > 20 * 1024 * 1024) {
-      preview.innerHTML = '<b>File is too large.</b> Choose a supported file under 20 MB.';
+    if (file.size > 50 * 1024 * 1024) {
+      preview.innerHTML = '<b>File is too large.</b> Choose a supported file under 50 MB.';
       message.textContent = '';
       importButton.textContent = 'File too large';
       return;
@@ -563,6 +621,7 @@
     try {
       const scanForm = new FormData();
       scanForm.set('category', importForm.elements.category.value);
+      scanForm.set('dataset_city', importForm.elements.dataset_city.value);
       scanForm.set('skip_duplicates', importForm.elements.skip_duplicates.checked);
       scanForm.set('normalize_labels', importForm.elements.normalize_labels.checked);
       scanForm.set('file', file);
@@ -593,8 +652,8 @@
     }
   }
 
-  importForm.elements.file.addEventListener('change', scanUpload);
-  importForm.elements.category.addEventListener('change', () => { if (importForm.elements.file.files?.[0]) scanUpload(); });
+  importForm.elements.file.addEventListener('change', () => { updateGtfsInputs(); scanUpload(); });
+  importForm.elements.category.addEventListener('change', () => { updateGtfsInputs(); if (importForm.elements.file.files?.[0]) scanUpload(); });
   importForm.elements.skip_duplicates.addEventListener('change', () => { if (importForm.elements.file.files?.[0]) scanUpload(); });
   importForm.elements.normalize_labels.addEventListener('change', () => { if (importForm.elements.file.files?.[0]) scanUpload(); });
 
@@ -611,6 +670,8 @@
       const result = await api('/api/v1/datasets/import', { method: 'POST', body: form });
       message.textContent = `${result.name}: ${number(result.row_count)} imported from ${number(result.scanned_rows)} scanned; ${number(result.skipped_invalid_rows)} invalid and ${number(result.duplicates_removed)} duplicate rows removed. Range ${number(result.minimum_value, 1)}–${number(result.maximum_value, 1)}, median ${number(result.median_value, 1)}. ${result.warnings.join(' ')}`;
       formElement.reset();
+      importForm.elements.dataset_city.value = $('#citySelect').value;
+      updateGtfsInputs();
       $('#filePreview').hidden = true;
       uploadReady = false;
       importButton.disabled = true;

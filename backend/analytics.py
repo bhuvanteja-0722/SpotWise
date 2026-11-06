@@ -219,6 +219,16 @@ def score_study(session: Session, study: Study, data: dict) -> dict:
         distance = signals["nearest_transit_distance_km"]
         scores["transit"] = {"score": round(max(0, 100 * (1 - distance / max_transit)), 1), "value": distance, "target": max_transit, "unit": "km", "method": "Nearest uploaded geocoded transit stop by straight-line distance; not walking distance."}
 
+    transit_connections = _category_stat(signals, "transit", ("routes_serving_stop",))
+    min_route_connections = assumptions.get("minimum_route_stop_connections")
+    if transit_connections and min_route_connections and min_route_connections > 0:
+        connections = transit_connections.get("total", 0)
+        scores["transit_service"] = {
+            "score": round(min(100, connections / min_route_connections * 100), 1),
+            "value": connections, "target": min_route_connections, "unit": "scheduled route-stop connections",
+            "method": "Sums distinct GTFS routes serving geocoded stops within the selected radius during the next 7 service days. A route can count at multiple stops; it is not passenger frequency or ridership.",
+        }
+
     traffic = _category_stat(signals, "traffic", ("speed",))
     min_speed = assumptions.get("minimum_traffic_speed_kmh")
     if traffic and min_speed and min_speed > 0:
