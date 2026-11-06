@@ -1,0 +1,1 @@
+"""SpotWise application backend."""

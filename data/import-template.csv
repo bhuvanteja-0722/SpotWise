@@ -1,0 +1,5 @@
+city,area,observed_at,metric,value,unit,name,category_label,latitude,longitude
+Mumbai,Andheri West,2026-10-01T18:00:00,visitors_per_day,420,people,,,
+Mumbai,Andheri West,2026-10-01T18:00:00,competitor_count,1,business,Sample Cafe,Cafe,19.1197,72.8464
+Mumbai,Andheri West,2026-10-01T18:00:00,available_spaces,24,spaces,Sample Parking,Public,19.1197,72.8464
+Mumbai,Andheri West,2026-10-01T18:00:00,transit_stop,1,stop,Sample Metro Stop,Metro,19.1197,72.8464
