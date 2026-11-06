@@ -6,7 +6,7 @@ SpotWise is a full-stack big data analysis project for researching where to open
 
 - Compares Mumbai residential rental listings by inferred locality, analyzes India-wide job postings, and summarizes city-level rail schedule coverage.
 - Filters uploaded local records by city, neighborhood, and—when coordinates are present—straight-line radius.
-- Imports CSV, Excel (.xlsx), JSON, JSON Lines, or Parquet data for footfall, competitor businesses, traffic, parking, transit stops, worker availability, salary, cost of living, and commercial rent.
+- Imports CSV, Excel (.xlsx), JSON, JSON Lines, Parquet, and static GTFS ZIP data for footfall, competitors, traffic, parking, transit, workforce, wages, cost of living, and commercial rent.
 - Summarizes uploaded records, including average, median, totals, hourly peak, and nearest geocoded transit point.
 - Saves, edits, lists, compares, and deletes location studies in a persistent SQLite database.
 - Scores factors only when both an uploaded signal and a matching user target exist. A composite readiness score requires at least three scored factors.
@@ -47,20 +47,23 @@ For a different database, set `DATABASE_URL`. SQLite is the default for a single
 | `GET /api/v1/dashboard?city=Mumbai&area=Powai` | Kaggle aggregates, market context, and matching local signals |
 | `GET /api/v1/signals?city=Mumbai&area=Powai&radius_km=1&latitude=19.1&longitude=72.8` | Local imported signal aggregates and radius filtering |
 | `GET /api/v1/data-sources` | Kaggle sources and locally imported batches |
-| `POST /api/v1/datasets/preview` | Scan and preview CSV, XLSX, JSON, JSONL/NDJSON, or Parquet data |
+| `GET /api/v1/transport-sources?city=Bengaluru` | Current transit source links for a selected city |
+| `POST /api/v1/datasets/preview` | Scan and preview CSV, XLSX, JSON, JSONL/NDJSON, Parquet, or static GTFS ZIP data |
 | `POST /api/v1/datasets/import` | Clean, normalize, and persist a local signal dataset |
 | `POST /api/v1/workforce/salary-estimate` | Estimate a role salary from the trained posting benchmark |
 | `DELETE /api/v1/data-sources/{id}` | Remove an uploaded batch and its imported records |
 | `GET/POST /api/v1/studies` | List or save a location study |
 | `GET/PUT/DELETE /api/v1/studies/{id}` | Retrieve, update assumptions, or remove a study |
 | `POST /api/v1/studies/compare` | Compare two to four saved studies |
-| `GET /api/v1/coverage` | Show data coverage and missing signals |
+| `GET /api/v1/coverage?city=Mumbai` | Show source leads and city-specific imported coverage |
 
 The backend uses FastAPI with SQLAlchemy and SQLite by default. FastAPI documents SQLite as a simple local option and SQLAlchemy supports switching to other database engines; see the [FastAPI SQL database guide](https://fastapi.tiangolo.com/tutorial/sql-databases/) and [SQLAlchemy ORM quick start](https://docs.sqlalchemy.org/en/21/orm/quickstart.html).
 
 ## Import your own local datasets
 
-Use the Data & methods section in the website, or send a multipart request to `POST /api/v1/datasets/import`. Select a signal category and upload CSV, Excel (.xlsx, first worksheet), JSON (array of objects or a `data`/`records`/`items`/`results` array), JSON Lines/NDJSON, or Parquet. Before importing, the website scans the selected format and previews sample rows, the usable/invalid/duplicate counts, coordinate and timestamp coverage, and common input issues. The backend rechecks every row, skips invalid rows, can remove exact duplicates, and can normalize repeated whitespace in city/area names. The application stores normalized rows in SQLite and does not retain the original uploaded file. Current limits are 20 MB and 100,000 rows per upload.
+Use the Data & methods section in the website, or send a multipart request to `POST /api/v1/datasets/import`. Select a signal category and upload CSV, Excel (.xlsx, first worksheet), JSON (array of objects or a `data`/`records`/`items` array), JSON Lines/NDJSON, Parquet, or a static GTFS ZIP. The website scans the file before import and previews sample rows, usable/invalid/duplicate counts, coordinate coverage, and common input issues. Current limits are 50 MB compressed and 100,000 output rows; expanded GTFS ZIP content is limited to 512 MB. The backend rechecks every row and stores normalized observations in SQLite; it does not retain the original file.
+
+For a GTFS ZIP, set the signal type to **Transit stops / stations**, choose the feed's city, then scan and import. The parser requires `stops.txt`, `routes.txt`, `trips.txt`, and `stop_times.txt`; it does not accept GTFS-Realtime protobuf files. It counts distinct routes serving each geocoded stop and checks `calendar.txt` / `calendar_dates.txt` for service on at least one of the next seven days. The nearest-stop feature and optional route-stop target then use these imported coordinates and route counts. Review the source feed's date range and license first. GTFS schedules show scheduled service, not passenger counts, road traffic, delays, or business success.
 
 The neighborhood picker only suggests areas backed by data for the currently selected city. The included preset locality list is Mumbai-only; other cities show no preset areas until local signals or saved study areas exist. You can still type a neighborhood manually, but area-specific metrics remain empty until matching local evidence is imported.
 
@@ -72,7 +75,7 @@ area, observed_at, metric, unit, name, category_label, latitude, longitude
 
 `observed_at` should be an ISO date or datetime. Coordinates must be WGS84 latitude/longitude decimals. Coordinates enable straight-line radius filtering and nearest-stop calculations; they do not represent walking distance or travel time.
 
-The upload scan checks UTF-8 CSVs (comma, semicolon, tab, or pipe separators), XLSX, JSON, JSONL/NDJSON, and Parquet. It maps common header aliases, validates numeric values, date/time strings, and coordinate pairs, and reports exact duplicate records. It does not silently remove unusual high/low values: review the reported range and source units before importing. Exact-row de-duplication is optional because repeated measurements can be valid when the timestamp or location differs.
+The upload scan checks UTF-8 CSVs (comma, semicolon, tab, or pipe separators), XLSX, JSON, JSONL/NDJSON, Parquet, and static GTFS ZIP. It maps common header aliases, validates numeric values, date/time strings, and coordinate pairs, and reports exact duplicate records. It does not silently remove unusual high/low values: review the reported range and source units before importing. Exact-row de-duplication is optional because repeated measurements can be valid when the timestamp or location differs.
 
 Recommended metric labels:
 
@@ -94,7 +97,7 @@ Label rows consistently. Salary and cost targets must use the same units as thei
 
 The readiness score is a transparent comparison heuristic, not a probability of success. A factor is scored only when both its uploaded records and a corresponding target are present. By default, observed factors have equal weight; scores are omitted until at least three factors can be evaluated.
 
-Supported target assumptions include monthly rent vs budget, minimum footfall, maximum competitor count, maximum distance to transit, minimum road speed, minimum parking spaces, required workers, maximum monthly wage, and maximum local cost. For traffic, SpotWise only scores a speed metric; raw vehicle counts are shown as context because higher volume can mean either customer access or congestion.
+Supported target assumptions include monthly rent vs budget, minimum footfall, maximum competitor count, maximum distance to transit, minimum GTFS route-stop connections in the study radius, minimum road speed, minimum parking spaces, required workers, maximum monthly wage, and maximum local cost. For traffic, SpotWise only scores a speed metric; raw vehicle counts are shown as context because higher volume can mean either customer access or congestion.
 
 The break-even calculator uses:
 
@@ -147,6 +150,26 @@ The static Kaggle sources do not contain live footfall, current competitor locat
 
 ## Recommended dataset expansion
 
+The website's **Data coverage** panel is a source map, not a claim that every source has already been downloaded. Its green **Source found** tag means a credible dataset or provider has been identified. **Local data** appears only when SpotWise has imported observations for the selected city; imported data for Bengaluru, for example, cannot mark Mumbai covered. Cards also report whether imported records have an area label. Select a source link in a card to review its original terms and access requirements.
+
+The following official and maintained sources improve on city-mismatched sample data. Availability varies by city, and none should be described as a current neighborhood measurement until its records are downloaded, cleaned, geocoded, dated, and imported.
+
+| Signal | Dataset / provider | What it can support | Limitation |
+| --- | --- | --- | --- |
+| Business competition and amenities | [Overture Maps Places](https://docs.overturemaps.org/guides/places/) | Geocoded business and amenity place listings with taxonomy and monthly global releases; public S3/Azure extracts can be queried for an area of interest. | Large, broad source. Known duplicates, junk records, and incomplete attributes; confidence only estimates whether a place exists. Filter category, status, confidence, deduplicate, validate India coverage, then import. It is not a complete live competitor census. |
+| Traffic, transit, and parking | [IUDX city catalogue](https://catalogue.iudx.org.in/) · [IUDX cities](https://iudx.org.in/cities/) | Discover participating Smart City feeds, including traffic, bus/transit, and smart parking resources. | Per-city sharing differs. Resource data may need an access token, approval, or city-provider permission. A catalogue entry is not proof of an accessible/current feed. |
+| Traffic and municipal datasets | [India Smart Cities Open Data](https://smartcities.data.gov.in/) | Discover datasets published by participating municipal Smart City portals. | Catalog and resource completeness varies; inspect the actual download, geography, date, and license before relying on it. |
+| Transit access | [Delhi Open Transit Data](https://otd.delhi.gov.in/documentation/) | Delhi bus GTFS stops, routes, trips, and schedules; a usable example of a city-specific source. | Delhi only. Published stop times are described as rough estimates; real-time feeds require authorization. Obtain another city's official GTFS feed separately. |
+| Transit footfall | [Delhi Transport Stack data services](https://delhi.transportstack.in/data-services) | Potential station-level hourly passenger counts and transit context in Delhi. | Provider access/approval and product scope apply. Station entries are not pedestrian footfall for every nearby street or neighborhood. |
+| Consumer cost context | [MoSPI Consumer Price Index](https://cpi.mospi.gov.in/) · [eSankhyiki CPI catalogue](https://esankhyiki.mospi.gov.in/catalogue-main/catalogue?product=CPI) | Official monthly price and index series. CPI collection covers selected urban markets and towns; useful as a broad inflation/context feature. | Not shop rent, neighborhood cost of living, or a business expense schedule. Match geography, series, base, units, and month before importing. |
+| Population and household profile | [Census of India API](https://censusindia.gov.in/census.website/en/data/api/about) · [Census 2011 Towns Directory](https://data.gov.in/catalog/complete-towns-directory-indiastatedistrictsub-district-level-census-2011) | Public aggregated population and housing context at available administrative geographies. | Census tables are historical (2011) and administrative areas do not equal modern neighborhoods. Use as dated context, not current footfall. |
+| Household expenditure | [MoSPI HCES 2023–24](https://www.mospi.gov.in/sites/default/files/publication_reports/HCES%20FactSheet%202023-24.pdf) | Household consumption/expenditure context; official microdata access and terms are described by MoSPI. | Broad geography and household context; not business operating costs. Microdata may require registration and an access agreement. |
+| Workforce | [MoSPI microdata portal](https://microdata.gov.in/) | Official labor-force survey data can contextualize employment at the geography made available. | Not a neighborhood count of workers ready to take a particular job. Check registration, permitted use, survey period, and geography. |
+| Retail commercial rent | [IIM Bangalore Commercial Real Estate Research Initiative](https://www.iimb.ac.in/reri/) | Commercial real-estate research and market indicators may provide wider office-market context. | No verified open, current, neighborhood-level shop/cafe lease dataset found. Residential Mumbai listings and office indices are not retail rent evidence. Collect current local leases or use a licensed listing provider. |
+| Street footfall / live parking | [Local authority or licensed mobility provider](https://delhi.transportstack.in/data-services) | Hourly pedestrian counts or parking occupancy when a city/provider actually exposes these measures. | No verified free, current, all-city neighborhood feed found. Use approved local counts or a licensed feed; never infer footfall from a language model or POI count. |
+
+These source links are included in the coverage endpoint and rendered as clickable references in the site. The project does **not** bundle Overture, CPI, Census, IUDX, or Delhi GTFS source extracts yet. The existing prepared analysis still consists of the three Kaggle snapshots listed below, plus any user datasets imported into the local database. This distinction matters: identifying a good source does not mean it has been integrated or that an API credential is available.
+
 These are candidate sources to inspect and preprocess; they are not presented as verified current truth. Check the dataset card, license, collection date, source terms, geographic precision, and redistribution rights before downloading or publishing derived data.
 
 | Priority | Source | Useful fields | Fit and limitation |
@@ -157,7 +180,26 @@ These are candidate sources to inspect and preprocess; they are not presented as
 | 4 | [Foot Traffic Würzburg retail forecasting data](https://www.kaggle.com/competitions/foot-traffic-wuerzburg-retail-forecasting-2-0/data) | Hourly pedestrian counters, weather, holidays and events | Excellent for demonstrating time-series/peak-hour preprocessing, but it is a German city and must never be joined into Indian location scores. Review competition rules before reuse. |
 | Mobility | [Delhi Open Transit Data](https://otd.delhi.gov.in/documentation/) · [Chennai CUMTA open data](https://opendata.cumta.org/) | GTFS stops, routes, schedules | Better city transit evidence than the historical 2015 rail snapshot. Feed availability and real-time access differ by city; Delhi documents that its published bus schedule times are rough estimates. |
 
-For a credible location score, prioritize recent, geocoded, local commercial listings/leases; a category-tagged POI/business dataset; official GTFS feeds; and licensed anonymized footfall or road-speed data. A large dataset is not automatically a better dataset: stale, synthetic, platform-scraped, coarse-geography, or mismatched-city rows can bias the result. The importer supports CSV, XLSX, JSON, JSONL/NDJSON, and Parquet signals; use the template and upload scan before importing new sources.
+### Current transit feeds by market (reviewed 2026-11-06)
+
+The Mobility section in SpotWise shows the source links for the currently selected city. Download the static `.zip` feed from its source page and import it with the GTFS uploader. Feed snapshots and access conditions differ; re-check the operator's service calendar before use.
+
+| Market | Latest useful source | Coverage and freshness caveat |
+| --- | --- | --- |
+| Ahmedabad | [Janmarg + AMTS GTFS in Mobility Database](https://mobilitydatabase.org/feeds/gtfs/mdb-3131) | Latest indexed snapshot checked 2026-10-01, service dates through 2027-03-29; the validator reported one error, so inspect the report before use. |
+| Bengaluru | [BMTC feed catalogue](https://mobilitydatabase.org/feeds?q=india) · [Namma Metro feed notes](https://metroroute.net/data-sources) | An older BMTC catalog entry is stale/replaced, so use the current entry only after checking its service calendar. Metro feed version 20260817 is community-transcribed and estimates intermediate stop times. |
+| Chennai | [CUMTA transit data portal](https://opendata.cumta.org/) | Static GTFS repository for MTC bus, metro, and suburban rail. Check the calendar inside each ZIP; it is not live vehicle tracking. |
+| Delhi NCR | [Delhi Open Transit Data](https://otd.delhi.gov.in/documentation/) · [Delhi Transport Stack](https://delhi.transportstack.in/data-services) | Bus static GTFS is published by Delhi's OTD portal; schedules can be rough estimates. Real-time bus feed requires authorization. Metro hourly station footfall is approval-based. |
+| Hyderabad | [TGSRTC Open Data](https://tgsrtc.telangana.gov.in/open-data) · [HMRL Open Data](https://hmrl.co.in/open-data.html) | TGSRTC GTFS feed version 20260201 has a listed service period 2026-02-01–2031-02-01; HMRL publishes metro GTFS. Attribution and operator terms apply. The catalogued MMTS feed found was expired, so do not use it as current without a replacement. |
+| Kolkata | [Mobility Database India catalogue](https://mobilitydatabase.org/feeds?q=india) · [Metro Railway Kolkata](https://mtp.indianrailways.gov.in/) | I did not verify a current validated Kolkata GTFS ZIP in this search. The operator site is service information, not a bulk GTFS feed. |
+| Mumbai | [BEST/TMT/KDMT community GTFS](https://github.com/croyla/mumbai-gtfs) · [Unofficial Indian Railways GTFS](https://mobilitydatabase.org/feeds/gtfs/mdb-2867) · [Mobility Database India catalogue](https://mobilitydatabase.org/feeds?q=india) | Community bus feed; check its latest commit. The national rail feed was checked Aug 31, 2026 but publishes no active service-date range; it is unofficial. SpotWise filters its stops to broad Mumbai metro bounds. No current official unified Mumbai suburban-train + metro GTFS feed was verified. |
+| Pune | [PMPML GTFS in Mobility Database](https://mobilitydatabase.org/feeds/gtfs/mdb-3137) · [Pune Metro](https://www.punemetrorail.org/) | Latest PMPML snapshot checked 2026-10-08, service dates through 2027-04-05. No current public Pune Metro GTFS was verified here. |
+
+**How transit enters the location model:** imported GTFS ZIPs are converted to geocoded stop observations containing distinct routes serving each stop during at least one of the next seven service days. National feeds are clipped to broad metro bounds for the selected market. Study scoring can use nearest stop distance and an optional minimum route-stop-connection target within the chosen radius. Connections can count the same route at multiple stops; this is a scheduled service coverage proxy, not frequency, real-time arrivals, ridership, or footfall. These feeds have no labeled business outcomes, so they cannot validly train a supervised business-success predictor. A separate transit prediction model would need labeled ridership or delay observations.
+
+These transit sources are linked in the app, but the raw feed ZIPs are not bundled in Git. The Bengaluru Namma Metro feed was validated and imported into the current local SpotWise database (170 geocoded stop records, feed version 20260817); the source ZIP remains under ignored `data/raw/`. Other feeds can be added through the same importer. No live API key is required for the static feeds listed above.
+
+For a credible location score, prioritize recent, geocoded, local commercial listings/leases; a category-tagged POI/business dataset; official GTFS feeds; and licensed anonymized footfall or road-speed data. A large dataset is not automatically a better dataset: stale, synthetic, platform-scraped, coarse-geography, or mismatched-city rows can bias the result. The importer supports CSV, XLSX, JSON, JSONL/NDJSON, Parquet, and static GTFS ZIP; use the upload scan before importing new sources.
 
 ### API recommendation
 
