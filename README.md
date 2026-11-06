@@ -17,7 +17,7 @@ SpotWise is a full-stack big data analysis project for researching where to open
 
 SpotWise uses a dark, low-glare workspace with a lime accent, muted green surfaces, and readable type. The layout groups the work into a clear path: select a market and business, review local context, check workforce and transport signals, model break-even, then save or compare studies. Cards, data-source badges, freshness notes, and empty states help distinguish observed data from user assumptions. The interface adapts to desktop and mobile widths, supports an optional light theme, and includes visible keyboard focus and reduced-motion support.
 
-The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. I kept the small locality/rent visualizations in CSS and native browser code because a chart framework would add more code and download weight than it would remove for these simple displays. The existing backend libraries handle the heavier work: FastAPI for routes, SQLAlchemy for persistence, scikit-learn/joblib for the fitted model, and PyArrow for Parquet. `requirements.txt` lists the Python packages.
+The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. The backend uses FastAPI, SQLAlchemy, scikit-learn/joblib, PyArrow, and DuckDB for cloud-querying large Overture GeoParquet releases. `requirements.txt` lists the Python packages.
 
 ## Run the full website and backend
 
@@ -97,7 +97,9 @@ Label rows consistently. Salary and cost targets must use the same units as thei
 
 The readiness score is a transparent comparison heuristic, not a probability of success. A factor is scored only when both its uploaded records and a corresponding target are present. By default, observed factors have equal weight; scores are omitted until at least three factors can be evaluated.
 
-Supported target assumptions include monthly rent vs budget, minimum footfall, maximum competitor count, maximum distance to transit, minimum GTFS route-stop connections in the study radius, minimum road speed, minimum parking spaces, required workers, maximum monthly wage, and maximum local cost. For traffic, SpotWise only scores a speed metric; raw vehicle counts are shown as context because higher volume can mean either customer access or congestion.
+Supported target assumptions include monthly rent vs budget, minimum footfall, maximum competitor count, maximum distance to transit, minimum GTFS route-stop connections in the study radius, minimum road speed, minimum parking spaces, required workers, maximum monthly wage, and maximum local cost. Overture Places observations with the `confidence_weighted_poi` metric contribute their source confidence to the competitor-density proxy; other uploaded competitor datasets are counted as records. For traffic, SpotWise only scores a speed metric; raw vehicle counts are shown as context because higher volume can mean either customer access or congestion.
+
+This is a transparent decision-support score, not a trained prediction of business success. No verified open dataset with business opening/closure, revenue, and location features was found to provide valid outcome labels. Overture provides place/category/existence-confidence labels, not profit outcomes; using those records as profit-training labels would be misleading. The separate salary estimator is trained on disclosed job-posting ranges and is not a worker-supply or business-profit model.
 
 The break-even calculator uses:
 
@@ -152,11 +154,12 @@ The static Kaggle sources do not contain live footfall, current competitor locat
 
 The website's **Data coverage** panel is a source map, not a claim that every source has already been downloaded. Its green **Source found** tag means a credible dataset or provider has been identified. **Local data** appears only when SpotWise has imported observations for the selected city; imported data for Bengaluru, for example, cannot mark Mumbai covered. Cards also report whether imported records have an area label. Select a source link in a card to review its original terms and access requirements.
 
-The following official and maintained sources improve on city-mismatched sample data. Availability varies by city, and none should be described as a current neighborhood measurement until its records are downloaded, cleaned, geocoded, dated, and imported.
+The following official and maintained sources improve on city-mismatched sample data. Availability varies by city. Overture Places is now queried and imported for Bengaluru; the other source rows are documented leads until their records are downloaded, cleaned, geocoded, dated, and imported.
 
 | Signal | Dataset / provider | What it can support | Limitation |
 | --- | --- | --- | --- |
 | Business competition and amenities | [Overture Maps Places](https://docs.overturemaps.org/guides/places/) | Geocoded business and amenity place listings with taxonomy and monthly global releases; public S3/Azure extracts can be queried for an area of interest. | Large, broad source. Known duplicates, junk records, and incomplete attributes; confidence only estimates whether a place exists. Filter category, status, confidence, deduplicate, validate India coverage, then import. It is not a complete live competitor census. |
+| Residential demand context | [GHSL GHS-POP R2023A](https://human-settlement.emergency.copernicus.eu/ghs_pop2023.php) · [AWS Open Data listing](https://registry.opendata.aws/ghs-pop/) | Modelled population grids at 100 m / 1 km; 2025–2030 include short-term projections, CC BY 4.0. | Population is residential and modelled/disaggregated, not daytime visitors, customer demand, or measured footfall. GHSL is documented as an additional source; its raster is not yet bundled or ingested by SpotWise. |
 | Traffic, transit, and parking | [IUDX city catalogue](https://catalogue.iudx.org.in/) · [IUDX cities](https://iudx.org.in/cities/) | Discover participating Smart City feeds, including traffic, bus/transit, and smart parking resources. | Per-city sharing differs. Resource data may need an access token, approval, or city-provider permission. A catalogue entry is not proof of an accessible/current feed. |
 | Traffic and municipal datasets | [India Smart Cities Open Data](https://smartcities.data.gov.in/) | Discover datasets published by participating municipal Smart City portals. | Catalog and resource completeness varies; inspect the actual download, geography, date, and license before relying on it. |
 | Transit access | [Delhi Open Transit Data](https://otd.delhi.gov.in/documentation/) | Delhi bus GTFS stops, routes, trips, and schedules; a usable example of a city-specific source. | Delhi only. Published stop times are described as rough estimates; real-time feeds require authorization. Obtain another city's official GTFS feed separately. |
@@ -168,7 +171,20 @@ The following official and maintained sources improve on city-mismatched sample 
 | Retail commercial rent | [IIM Bangalore Commercial Real Estate Research Initiative](https://www.iimb.ac.in/reri/) | Commercial real-estate research and market indicators may provide wider office-market context. | No verified open, current, neighborhood-level shop/cafe lease dataset found. Residential Mumbai listings and office indices are not retail rent evidence. Collect current local leases or use a licensed listing provider. |
 | Street footfall / live parking | [Local authority or licensed mobility provider](https://delhi.transportstack.in/data-services) | Hourly pedestrian counts or parking occupancy when a city/provider actually exposes these measures. | No verified free, current, all-city neighborhood feed found. Use approved local counts or a licensed feed; never infer footfall from a language model or POI count. |
 
-These source links are included in the coverage endpoint and rendered as clickable references in the site. The project does **not** bundle Overture, CPI, Census, IUDX, or Delhi GTFS source extracts yet. The existing prepared analysis still consists of the three Kaggle snapshots listed below, plus any user datasets imported into the local database. This distinction matters: identifying a good source does not mean it has been integrated or that an API credential is available.
+These source links are included in the coverage endpoint and rendered as clickable references in the site. The project does **not** bundle raw Overture, GHSL, CPI, Census, IUDX, or Delhi GTFS source extracts. The current local database has 2,136 Bengaluru Overture restaurant observations (release `2026-10-21.0`, minimum existence confidence 0.85) and 170 Bengaluru Namma Metro stop observations, in addition to the three prepared Kaggle snapshots described below. Local databases and generated extracts are ignored by Git; rerun the preparation command to reproduce the Overture extract. A source listing does not guarantee comprehensive or current coverage.
+
+### Query and import Overture Places
+
+Overture publishes global Places as cloud-hosted GeoParquet and supports bounded DuckDB queries. This avoids downloading the complete global dataset. After installing project requirements, query the selected market and an Overture `basic_category` (for example `restaurant`), then import the generated CSV from the website as **Business competition**. The default extracts retain currently open or unclassified places with confidence at least 0.70; choose a higher threshold for stricter filtering.
+
+```bash
+python scripts/prepare_overture_places.py \
+  --city Bengaluru \
+  --category restaurant \
+  --minimum-confidence 0.85
+```
+
+The command writes under ignored `data/processed/`; then use the website's upload scan and import. It records each place's locality, category, coordinates, and existence-confidence value. The local Bengaluru import used 2,136 records from release `2026-10-21.0`, restricted to restaurants at confidence ≥0.85. The model sums those confidence values as a weighted listing-density proxy. Overture says existence confidence is not a calibrated probability and is not comparable across contributing providers, so interpret the score relatively, review categories, and validate listings locally. The dataset includes open-map sources and requires attribution; follow [Overture attribution and licensing](https://docs.overturemaps.org/guides/attribution/).
 
 These are candidate sources to inspect and preprocess; they are not presented as verified current truth. Check the dataset card, license, collection date, source terms, geographic precision, and redistribution rights before downloading or publishing derived data.
 
