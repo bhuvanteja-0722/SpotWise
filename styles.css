@@ -43,3 +43,155 @@ body.light .study-setup{background:linear-gradient(135deg,#fff,#f6f9f1);border-c
 .salary-estimate-result small { display: block; margin: 10px 0; line-height: 1.6; }
 .salary-estimate-foot { display: flex; justify-content: space-between; gap: 16px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 @media (max-width: 760px) { .salary-estimate-form { grid-template-columns: 1fr; } .salary-estimate-foot { flex-direction: column; } }
+
+/* SpotWise visual system: clearer type, layered surfaces, and calmer motion. */
+:root {
+  --lime: #c5f16b;
+  --lime2: #a8d849;
+  --radius: 17px;
+  --shadow: 0 18px 48px #0004;
+}
+body {
+  font-size: 14px;
+  background:
+    radial-gradient(ellipse at 88% 1%, #b3df5010 0, transparent 31rem),
+    var(--bg);
+}
+.layout main { padding-right: clamp(24px, 4vw, 58px); padding-left: clamp(24px, 4vw, 58px); }
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  height: 70px;
+  backdrop-filter: blur(18px);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+}
+.sidebar { padding: 28px 17px 23px; }
+.nav-link { min-height: 42px; font-size: 12px; border-radius: 10px; }
+.nav-link.active { background: linear-gradient(100deg, #c5f16b1b, #c5f16b08); }
+.nav-icon { font-size: 17px; }
+.hero { min-height: 390px; padding-top: 42px; padding-bottom: 32px; }
+.hero h1 { font-size: clamp(43px, 4.2vw, 66px); letter-spacing: -3.5px; }
+.hero-copy > p { font-size: 14px; }
+.kicker { font-size: 10px; }
+.study-setup { max-width: 900px; padding: 19px; border-radius: 16px; box-shadow: 0 18px 50px #0002; }
+.setup-heading b { font-size: 13px; }
+.setup-heading small { font-size: 10px; }
+.select-wrap { min-height: 52px; border-radius: 11px; }
+.select-wrap > span { font-size: 9px; }
+.select-wrap select, .select-wrap input { font-size: 12px; }
+.button { min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: 11px; transition: background .18s ease, transform .18s ease, box-shadow .18s ease; }
+.button-lime { box-shadow: 0 7px 20px #c5f16b20; }
+.button-lime:hover { box-shadow: 0 10px 24px #c5f16b35; }
+.selection-summary { font-size: 10px; }
+.data-ribbon { padding: 19px 22px; border-radius: 15px; box-shadow: inset 0 1px #ffffff08; }
+.data-ribbon b { font-size: 15px; }
+.data-ribbon small { font-size: 10px; }
+.section-block { margin-bottom: 64px; scroll-margin-top: 88px; }
+.section-heading { margin-bottom: 22px; }
+.section-eyebrow { font-size: 9px; }
+.section-heading h2 { font-size: clamp(23px, 2.1vw, 29px); letter-spacing: -1px; }
+.section-heading p { font-size: 12px; line-height: 1.65; }
+.source-badge { font-size: 8px; padding: 7px 10px; border-radius: 7px; }
+.workflow-steps { margin-bottom: 34px; padding: 15px 18px; border-radius: 15px; }
+.workflow-steps b { font-size: 11px; }
+.workflow-steps small { font-size: 9px; }
+.workflow-steps a > span { width: 30px; height: 30px; font-size: 9px; border-radius: 10px; }
+.panel { padding: 22px; border-radius: 17px; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+.panel:hover { border-color: color-mix(in srgb, var(--lime) 22%, var(--line)); box-shadow: 0 22px 50px #0005; }
+.panel-eyebrow { font-size: 8px; letter-spacing: 1px; }
+.panel h3 { font-size: 15px; }
+.panel-top .tiny-unit { font-size: 9px; }
+.rent-panel { min-height: 320px; }
+.rent-chart { height: 204px; }
+.rent-locality, .rent-amount { font-size: 9px; }
+.chart-foot { font-size: 10px; }
+.insight-label { font-size: 11px; }
+.insight-value { font-size: 33px; }
+.insight-note, .inline-warning { font-size: 10px; }
+.mini-stat { font-size: 10px; }
+.workforce-number { font-size: 43px; }
+.workforce-salary { font-size: 16px; }
+.workforce-sub small, .legend-foot, .role-name, .role-value, .skill-tag { font-size: 10px; }
+.mobility-summary p, .mobility-stats small, .mobility-alert p { font-size: 11px; }
+.mobility-stats b { font-size: 20px; }
+.input-field { gap: 7px; }
+.input-field span { font-size: 10px; }
+.input-field em { font-size: 9px; }
+.input-field input, .input-field select { height: 42px; font-size: 12px; border-radius: 9px; }
+.input-grid { gap: 15px; }
+.planner-hint, .planner-note, .result-line, .result-verdict { font-size: 10px; }
+.result-net { padding: 19px; }
+.result-net > span { font-size: 11px; }
+.result-net > b { font-size: 29px; }
+.result-net > small { font-size: 9px; }
+.coverage-item, .source-card { padding: 17px; border-radius: 14px; }
+.coverage-top b, .source-card h4 { font-size: 12px; }
+.coverage-item p, .source-card p, .source-license { font-size: 10px; line-height: 1.65; }
+.signal-card { padding: 18px; border-radius: 15px; }
+.signal-card-top, .signal-unit, .signal-meta { font-size: 10px; }
+.signal-value { font-size: 23px; }
+.study-card { padding: 19px; border-radius: 15px; }
+.study-card h3 { font-size: 15px; }
+.study-place, .study-business { font-size: 10px; }
+.study-score b { font-size: 14px; }
+.study-score span, .study-date { font-size: 9px; }
+.importer-head h3 { font-size: 19px; }
+.importer-head p, .import-schema, .import-message { font-size: 10px; line-height: 1.7; }
+.import-form { gap: 13px; }
+.input-field select { height: 42px; font-size: 11px; }
+.file-field input { height: 42px; font-size: 10px; }
+.import-form > .button { min-height: 42px; font-size: 10px; }
+.cleaning-options label, .cleaning-options small { font-size: 9px; }
+.file-preview { font-size: 10px; line-height: 1.8; border-radius: 12px; }
+.file-preview td, .file-preview th { padding: 7px; }
+.salary-estimator { padding: 25px; }
+.salary-estimate-result { border-radius: 12px; }
+.salary-estimate-foot { font-size: 10px; }
+:where(a, button, input, select, summary):focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+@media (max-width: 1180px) {
+  .layout main { padding-right: 30px; padding-left: 30px; }
+  .hero { min-height: 360px; }
+}
+@media (max-width: 850px) {
+  .topbar { height: 64px; }
+  .hero { min-height: 0; padding: 34px 0 25px; }
+  .hero h1 { font-size: clamp(42px, 7vw, 58px); }
+  .section-block { margin-bottom: 50px; }
+  .panel { padding: 19px; }
+}
+@media (max-width: 620px) {
+  .two-column, .planner-grid { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  .two-column > *, .planner-grid > *, .panel { min-width: 0; }
+  .rent-chart { min-width: 0; }
+  .layout main { padding: 0 17px 24px; }
+  .topbar { height: 58px; }
+  .hero { padding-top: 27px; }
+  .hero h1 { font-size: clamp(38px, 10vw, 48px); letter-spacing: -2.4px; }
+  .hero-copy > p { font-size: 13px; }
+  .study-setup { padding: 14px; }
+  .hero-controls .button { min-height: 42px; font-size: 10px; }
+  .data-ribbon { gap: 13px; padding: 14px; }
+  .data-ribbon > div { flex: 1 1 42%; }
+  .data-ribbon b { font-size: 13px; }
+  .section-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .section-heading h2 { font-size: 24px; }
+  .section-heading p { font-size: 11px; }
+  .section-tools { flex-wrap: wrap; }
+  .panel { padding: 17px; border-radius: 15px; }
+  .rent-chart { gap: 9px; }
+  .rent-column { min-width: 62px; }
+  .study-grid, .signal-grid { gap: 12px; }
+  .salary-estimator { margin-top: 14px; padding: 18px; }
+  .salary-estimate-form { gap: 11px; }
+  .salary-estimate-foot { line-height: 1.6; }
+  .import-form { grid-template-columns: 1fr; }
+  .import-form > .button { grid-column: 1; }
+  .cleaning-options { align-items: flex-start; }
+}
