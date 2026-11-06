@@ -6,7 +6,7 @@ SpotWise is a full-stack big data analysis project for researching where to open
 
 - Compares Mumbai residential rental listings by inferred locality, analyzes India-wide job postings, and summarizes city-level rail schedule coverage.
 - Filters uploaded local records by city, neighborhood, and—when coordinates are present—straight-line radius.
-- Imports user-owned CSV data for footfall, competitor businesses, traffic, parking, transit stops, worker availability, salary, cost of living, and commercial rent.
+- Imports CSV, Excel (.xlsx), JSON, JSON Lines, or Parquet data for footfall, competitor businesses, traffic, parking, transit stops, worker availability, salary, cost of living, and commercial rent.
 - Summarizes uploaded records, including average, median, totals, hourly peak, and nearest geocoded transit point.
 - Saves, edits, lists, compares, and deletes location studies in a persistent SQLite database.
 - Scores factors only when both an uploaded signal and a matching user target exist. A composite readiness score requires at least three scored factors.
@@ -41,7 +41,9 @@ For a different database, set `DATABASE_URL`. SQLite is the default for a single
 | `GET /api/v1/dashboard?city=Mumbai&area=Powai` | Kaggle aggregates, market context, and matching local signals |
 | `GET /api/v1/signals?city=Mumbai&area=Powai&radius_km=1&latitude=19.1&longitude=72.8` | Local imported signal aggregates and radius filtering |
 | `GET /api/v1/data-sources` | Kaggle sources and locally imported batches |
-| `POST /api/v1/datasets/import` | Normalize and persist a CSV signal dataset |
+| `POST /api/v1/datasets/preview` | Scan and preview CSV, XLSX, JSON, JSONL/NDJSON, or Parquet data |
+| `POST /api/v1/datasets/import` | Clean, normalize, and persist a local signal dataset |
+| `POST /api/v1/workforce/salary-estimate` | Estimate a role salary from the trained posting benchmark |
 | `DELETE /api/v1/data-sources/{id}` | Remove an uploaded batch and its imported records |
 | `GET/POST /api/v1/studies` | List or save a location study |
 | `GET/PUT/DELETE /api/v1/studies/{id}` | Retrieve, update assumptions, or remove a study |
@@ -52,7 +54,7 @@ The backend uses FastAPI with SQLAlchemy and SQLite by default. FastAPI document
 
 ## Import your own local datasets
 
-Use the Data & methods section in the website, or send a multipart request to `POST /api/v1/datasets/import`. Select a signal category and include a CSV. Before saving, the website scans the file and previews sample rows, the usable/invalid/duplicate counts, coordinate and timestamp coverage, and common input issues. The backend rechecks every row, skips invalid rows, can remove exact duplicates, and can normalize repeated whitespace in city/area names. The application stores normalized rows in SQLite and does not retain the original uploaded file. Current limits are 20 MB and 100,000 rows per upload.
+Use the Data & methods section in the website, or send a multipart request to `POST /api/v1/datasets/import`. Select a signal category and upload CSV, Excel (.xlsx, first worksheet), JSON (array of objects or a `data`/`records`/`items`/`results` array), JSON Lines/NDJSON, or Parquet. Before importing, the website scans the selected format and previews sample rows, the usable/invalid/duplicate counts, coordinate and timestamp coverage, and common input issues. The backend rechecks every row, skips invalid rows, can remove exact duplicates, and can normalize repeated whitespace in city/area names. The application stores normalized rows in SQLite and does not retain the original uploaded file. Current limits are 20 MB and 100,000 rows per upload.
 
 The neighborhood picker only suggests areas backed by data for the currently selected city. The included preset locality list is Mumbai-only; other cities show no preset areas until local signals or saved study areas exist. You can still type a neighborhood manually, but area-specific metrics remain empty until matching local evidence is imported.
 
@@ -64,7 +66,7 @@ area, observed_at, metric, unit, name, category_label, latitude, longitude
 
 `observed_at` should be an ISO date or datetime. Coordinates must be WGS84 latitude/longitude decimals. Coordinates enable straight-line radius filtering and nearest-stop calculations; they do not represent walking distance or travel time.
 
-The upload scan checks UTF-8 CSVs, recognizes comma/semicolon/tab/pipe separators, maps common header aliases, validates numeric values, date/time strings, and coordinate pairs, and reports exact duplicate records. It does not silently remove unusual high/low values: review the reported range and source units before importing. Exact-row de-duplication is optional because repeated measurements can be valid when the timestamp or location differs.
+The upload scan checks UTF-8 CSVs (comma, semicolon, tab, or pipe separators), XLSX, JSON, JSONL/NDJSON, and Parquet. It maps common header aliases, validates numeric values, date/time strings, and coordinate pairs, and reports exact duplicate records. It does not silently remove unusual high/low values: review the reported range and source units before importing. Exact-row de-duplication is optional because repeated measurements can be valid when the timestamp or location differs.
 
 Recommended metric labels:
 
@@ -121,6 +123,18 @@ python3 scripts/build_analysis.py \
   --out data/analysis.json
 ```
 
+## Trained salary benchmark
+
+The repository includes a fitted scikit-learn Ridge pipeline at `models/salary_estimator.joblib`, trained from the included Kaggle job posting source. It predicts an annual salary midpoint from job title, skills, broad market, role group, and experience; the website exposes it as a monthly estimate and empirical holdout range. The source has 97,929 rows, of which 33,203 disclosed INR salary rows passed cleaning. Evaluation uses an 80/20 holdout grouped by exact normalized job title: MAE ₹274,469/year, median absolute error ₹102,409/year, R² 0.523, and median absolute percentage error 23.55%. See `models/salary_estimator_metrics.json` for split details and limitations. This is a posting benchmark, not available-worker counts or a local wage survey.
+
+The source is CC BY-NC-SA 4.0. Non-commercial and share-alike terms apply to adapted data and the derived model. Keep this project academic/non-commercial unless you confirm rights for your intended use. Raw job data is excluded from Git. To retrain after obtaining the source file:
+
+```bash
+python3 scripts/train_salary_model.py --jobs data/raw/jobs/indian-job-market-dataset-2025.xlsx
+```
+
+The script writes a fitted model and its evaluation report under `models/`.
+
 ## Scope and deployment notes
 
 The static Kaggle sources do not contain live footfall, current competitor locations, traffic, parking occupancy, current metro/bus access, or neighborhood-level workforce availability. Import appropriately licensed datasets to analyze those dimensions; external maps/mobility API credentials are not required for local operation. No API key is bundled.
@@ -137,7 +151,7 @@ These are candidate sources to inspect and preprocess; they are not presented as
 | 4 | [Foot Traffic Würzburg retail forecasting data](https://www.kaggle.com/competitions/foot-traffic-wuerzburg-retail-forecasting-2-0/data) | Hourly pedestrian counters, weather, holidays and events | Excellent for demonstrating time-series/peak-hour preprocessing, but it is a German city and must never be joined into Indian location scores. Review competition rules before reuse. |
 | Mobility | [Delhi Open Transit Data](https://otd.delhi.gov.in/documentation/) · [Chennai CUMTA open data](https://opendata.cumta.org/) | GTFS stops, routes, schedules | Better city transit evidence than the historical 2015 rail snapshot. Feed availability and real-time access differ by city; Delhi documents that its published bus schedule times are rough estimates. |
 
-For a credible location score, prioritize recent, geocoded, local commercial listings/leases; a category-tagged POI/business dataset; official GTFS feeds; and licensed anonymized footfall or road-speed data. A large dataset is not automatically a better dataset: stale, synthetic, platform-scraped, coarse-geography, or mismatched-city rows can bias the result. The current importer supports CSV signals; use the template and the upload scan before importing new sources.
+For a credible location score, prioritize recent, geocoded, local commercial listings/leases; a category-tagged POI/business dataset; official GTFS feeds; and licensed anonymized footfall or road-speed data. A large dataset is not automatically a better dataset: stale, synthetic, platform-scraped, coarse-geography, or mismatched-city rows can bias the result. The importer supports CSV, XLSX, JSON, JSONL/NDJSON, and Parquet signals; use the template and upload scan before importing new sources.
 
 ### API recommendation
 
