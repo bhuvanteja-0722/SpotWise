@@ -208,11 +208,17 @@ def score_study(session: Session, study: Study, data: dict) -> dict:
         actual = footfall.get("total", 0)
         scores["footfall"] = {"score": round(min(100, actual / min_footfall * 100), 1), "value": actual, "target": min_footfall, "unit": footfall.get("unit", "count"), "method": "Uploaded footfall total compared with your minimum daily target; use daily-level input rows."}
 
-    competition = _category_stat(signals, "competition")
+    competition = _category_stat(signals, "competition", ("confidence_weighted_poi",)) or _category_stat(signals, "competition")
     max_competitors = assumptions.get("maximum_competitors")
     if competition and max_competitors and max_competitors > 0:
         count = competition.get("total", competition.get("record_count", 0))
-        scores["competition"] = {"score": round(max(0, 100 * (1 - count / max_competitors)), 1), "value": count, "target": max_competitors, "unit": "businesses", "method": "Counts uploaded competitor records within the selected scope and compares with your cap."}
+        weighted = "confidence_weighted_poi" in signals["categories"].get("competition", {}).get("metrics", {})
+        scores["competition"] = {
+            "score": round(max(0, 100 * (1 - count / max_competitors)), 1), "value": round(count, 2),
+            "target": max_competitors, "unit": "confidence-weighted listings" if weighted else "businesses",
+            "method": "Sums Overture Places existence-confidence weights for filtered listings in the selected scope; this is a relative listing-density proxy, not a verified competitor census or customer-demand measure."
+            if weighted else "Counts uploaded competitor records within the selected scope and compares with your cap.",
+        }
 
     max_transit = assumptions.get("max_transit_distance_km")
     if signals["nearest_transit_distance_km"] is not None and max_transit and max_transit > 0:
