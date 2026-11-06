@@ -54,6 +54,8 @@ The backend uses FastAPI with SQLAlchemy and SQLite by default. FastAPI document
 
 Use the Data & methods section in the website, or send a multipart request to `POST /api/v1/datasets/import`. Select a signal category and include a CSV. Before saving, the website scans the file and previews sample rows, the usable/invalid/duplicate counts, coordinate and timestamp coverage, and common input issues. The backend rechecks every row, skips invalid rows, can remove exact duplicates, and can normalize repeated whitespace in city/area names. The application stores normalized rows in SQLite and does not retain the original uploaded file. Current limits are 20 MB and 100,000 rows per upload.
 
+The neighborhood picker only suggests areas backed by data for the currently selected city. The included preset locality list is Mumbai-only; other cities show no preset areas until local signals or saved study areas exist. You can still type a neighborhood manually, but area-specific metrics remain empty until matching local evidence is imported.
+
 Download the [CSV template](data/import-template.csv). Required columns are `city` and numeric `value`. Optional columns are:
 
 ```text
