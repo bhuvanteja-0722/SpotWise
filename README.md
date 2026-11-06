@@ -13,6 +13,12 @@ SpotWise is a full-stack big data analysis project for researching where to open
 - Calculates a user-entered monthly break-even scenario and exports a JSON research snapshot.
 - Serves interactive API documentation at `/docs`.
 
+## Interface and frontend design
+
+SpotWise uses a dark, low-glare workspace with a lime accent, muted green surfaces, and readable type. The layout groups the work into a clear path: select a market and business, review local context, check workforce and transport signals, model break-even, then save or compare studies. Cards, data-source badges, freshness notes, and empty states help distinguish observed data from user assumptions. The interface adapts to desktop and mobile widths, supports an optional light theme, and includes visible keyboard focus and reduced-motion support.
+
+The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. I kept the small locality/rent visualizations in CSS and native browser code because a chart framework would add more code and download weight than it would remove for these simple displays. The existing backend libraries handle the heavier work: FastAPI for routes, SQLAlchemy for persistence, scikit-learn/joblib for the fitted model, and PyArrow for Parquet. `requirements.txt` lists the Python packages.
+
 ## Run the full website and backend
 
 Requires Python 3.10 or later.
