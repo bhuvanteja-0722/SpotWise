@@ -100,3 +100,14 @@ class SalaryEstimateRequest(BaseModel):
     job_title: str = Field(min_length=2, max_length=160)
     skills: str = Field(default="", max_length=500)
     experience_years: float = Field(default=0, ge=0, le=60)
+
+
+class PlaceCategoryRequest(BaseModel):
+    names: list[str] = Field(min_length=1, max_length=30)
+    city: str | None = Field(default=None, min_length=2, max_length=90)
+
+    @model_validator(mode="after")
+    def validate_names(self):
+        if any(not name.strip() or len(name) > 180 for name in self.names):
+            raise ValueError("Each business name must contain 1 to 180 characters")
+        return self

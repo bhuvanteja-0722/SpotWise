@@ -51,6 +51,7 @@ For a different database, set `DATABASE_URL`. SQLite is the default for a single
 | `POST /api/v1/datasets/preview` | Scan and preview CSV, XLSX, JSON, JSONL/NDJSON, Parquet, or static GTFS ZIP data |
 | `POST /api/v1/datasets/import` | Clean, normalize, and persist a local signal dataset |
 | `POST /api/v1/workforce/salary-estimate` | Estimate a role salary from the trained posting benchmark |
+| `POST /api/v1/business/classify` | Suggest Overture business taxonomy categories from listing names |
 | `DELETE /api/v1/data-sources/{id}` | Remove an uploaded batch and its imported records |
 | `GET/POST /api/v1/studies` | List or save a location study |
 | `GET/PUT/DELETE /api/v1/studies/{id}` | Retrieve, update assumptions, or remove a study |
@@ -145,6 +146,32 @@ python3 scripts/train_salary_model.py --jobs data/raw/jobs/indian-job-market-dat
 ```
 
 The script writes a fitted model and its evaluation report under `models/`.
+
+## Trained business-category model
+
+SpotWise also includes `models/place_category_classifier.joblib`, trained from Overture Places labels. It suggests a taxonomy category from a business listing's name to help review and clean competitor data. Training used 77,958 Bengaluru listings from release `2026-10-21.0`; 75,286 named/category-labeled rows were eligible, and the grouped holdout contained 18,536 rows across 158 categories. Holdout top-1 accuracy was 48.0%, top-3 accuracy 64.2%, and macro F1 0.368. Identical normalized names were kept in one split to reduce leakage. This is a rough suggestion tool, trained on Bengaluru only; the API returns a scope warning for other cities and must not silently overwrite user labels.
+
+Example request to `/api/v1/business/classify`:
+
+```json
+{"city":"Bengaluru","names":["Cafe Coffee Day","Apollo Pharmacy"]}
+```
+
+The API returns up to three category suggestions and uncalibrated model scores for each name. A low holdout score means suggestions need human review. The model is not for business success, demand, or revenue prediction.
+
+Training and evaluating the classifier uses the larger, multi-category Overture query:
+
+```bash
+python scripts/prepare_overture_places.py \
+  --city Bengaluru \
+  --minimum-confidence 0.70 \
+  --max-rows 95000 \
+  --output data/processed/overture_bengaluru_all_2026-10-21.0.csv
+python scripts/train_place_category_model.py \
+  --places data/processed/overture_bengaluru_all_2026-10-21.0.csv
+```
+
+The fitted artifact and evaluation report are written to `models/`. The training release contains about 78,000 Bengaluru records and many taxonomy categories; see `models/place_category_classifier_metrics.json` for the exact holdout results. Name-only labels are ambiguous and local naming varies, so suggestions can be wrong. The classifier does not estimate business demand, revenue, profit, or success. Overture is an open data aggregation with upstream sources and attribution obligations; review the [attribution and licensing guidance](https://docs.overturemaps.org/guides/attribution/) before redistribution or commercial use.
 
 ## Scope and deployment notes
 

@@ -14,8 +14,9 @@ from .analytics import break_even, load_analysis, market_context, score_study, s
 from .dataset_import import normalize_rows, read_rows
 from .db import Base, ROOT, engine, get_session
 from .models import Observation, SignalBatch, Study, utc_now
+from .place_category_model import classify_place_names
 from .salary_model import estimate_salary
-from .schemas import DatasetImportResult, DatasetPreview, SalaryEstimateRequest, StudyComparison, StudyCreate, StudyUpdate
+from .schemas import DatasetImportResult, DatasetPreview, PlaceCategoryRequest, SalaryEstimateRequest, StudyComparison, StudyCreate, StudyUpdate
 from .transit_sources import sources_for_city
 
 MAX_UPLOAD_BYTES = int(os.getenv("SPOTWISE_MAX_UPLOAD_MB", "50")) * 1024 * 1024
@@ -130,6 +131,14 @@ def workforce_salary_estimate(body: SalaryEstimateRequest):
         return estimate_salary(body.city, body.job_title, body.skills, body.experience_years)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail="Salary model has not been trained. See the README training instructions.") from exc
+
+
+@app.post("/api/v1/business/classify", tags=["business intelligence"])
+def business_category_suggestions(body: PlaceCategoryRequest):
+    try:
+        return classify_place_names([name.strip() for name in body.names], body.city)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail="Place category model is not available. See the README model training instructions.") from exc
 
 
 @app.get("/api/v1/dashboard", tags=["analysis"])
