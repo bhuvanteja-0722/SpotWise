@@ -1,0 +1,1136 @@
+{
+  "model_name": "SpotWise Overture Places name-to-category classifier",
+  "trained_at": "2026-11-06",
+  "source_url": "https://docs.overturemaps.org/guides/places/",
+  "source_release": "2026-10-21.0",
+  "source_cities": [
+    "Bengaluru"
+  ],
+  "source_rows": 77958,
+  "named_labeled_rows": 75286,
+  "training_rows": 56222,
+  "holdout_rows": 18536,
+  "excluded_rare_or_unlabeled_rows": 3200,
+  "minimum_examples_per_category": 20,
+  "categories": [
+    "agricultural_service",
+    "air_transport_facility_or_service",
+    "airport",
+    "amusement_park",
+    "animal_and_pet_store",
+    "animal_or_pet_service",
+    "apartment",
+    "art_gallery",
+    "arts_and_entertainment",
+    "arts_crafts_and_hobby_store",
+    "astrological_advising",
+    "atm",
+    "attorney_or_law_firm",
+    "auto_dealer",
+    "automotive_service",
+    "b2b_energy_and_utility_service",
+    "b2b_industrial_and_machine_service",
+    "b2b_office_and_professional_service",
+    "b2b_science_and_technology_service",
+    "b2b_service",
+    "b2b_transportation_and_storage_service",
+    "bank_or_credit_union",
+    "bar",
+    "beach",
+    "bed_and_breakfast",
+    "behavioral_or_mental_health_clinic",
+    "books_music_and_video_store",
+    "brewery",
+    "building_or_construction_service",
+    "cafe",
+    "campus_building",
+    "casual_eatery",
+    "christian_place_of_worship",
+    "civic_organization",
+    "coffee_shop",
+    "college_university",
+    "community_and_government",
+    "community_center",
+    "complementary_and_alternative_medicine",
+    "condominium",
+    "corporate_or_business_office",
+    "cultural_center",
+    "dance_club",
+    "dental_clinic",
+    "department_store",
+    "design_service",
+    "diagnostics_imaging_or_lab_service",
+    "education",
+    "educational_service",
+    "electronics_store",
+    "elementary_school",
+    "environmental_or_ecological_service",
+    "ev_charging_station",
+    "event_or_party_service",
+    "event_venue",
+    "family_service",
+    "farm",
+    "fashion_and_apparel_store",
+    "fast_food_restaurant",
+    "financial_service",
+    "fitness_studio",
+    "flowers_and_gifts_store",
+    "food_and_beverage_store",
+    "food_service",
+    "food_truck_stand",
+    "fueling_station",
+    "gas_station",
+    "government_office",
+    "gym",
+    "hardware_home_and_garden_store",
+    "health_care",
+    "high_school",
+    "hindu_place_of_worship",
+    "historic_site",
+    "home_service",
+    "hospital",
+    "hotel",
+    "lake",
+    "laundry_service",
+    "legal_service",
+    "library",
+    "lodging",
+    "lounge",
+    "manufacturer",
+    "market",
+    "media_service",
+    "medical_service",
+    "movie_theater",
+    "museum",
+    "music_venue",
+    "musical_instrument_and_pro_audio_store",
+    "muslim_place_of_worship",
+    "natural_gas_utility_provider",
+    "non_alcoholic_beverage_venue",
+    "office_supply_store",
+    "outpatient_care_facility",
+    "park",
+    "pediatric_clinic",
+    "performing_arts_venue",
+    "personal_care_and_beauty_store",
+    "personal_or_beauty_service",
+    "pharmacy_and_drug_store",
+    "physical_medicine_and_rehabilitation",
+    "place_of_learning",
+    "playground",
+    "police_station",
+    "preschool",
+    "printing_service",
+    "private_lodging",
+    "professional_service",
+    "public_transit_facility_or_service",
+    "real_estate_service",
+    "religious_organization",
+    "rental_service",
+    "reproductive_perinatal_and_womens_care",
+    "research_institute",
+    "resort",
+    "restaurant",
+    "second_hand_store",
+    "security_service",
+    "senior_living_facility",
+    "shipping_or_delivery_service",
+    "shopping",
+    "shopping_mall",
+    "smoothie_juice_bar",
+    "social_or_community_service",
+    "specialized_health_care",
+    "specialized_medical_facility",
+    "specialty_school",
+    "specialty_store",
+    "sport_court",
+    "sport_league",
+    "sport_or_fitness_facility",
+    "sport_or_recreation_club",
+    "sporting_goods_store",
+    "sports_and_recreation",
+    "stadium_arena",
+    "storage_facility",
+    "supplier_or_distributor",
+    "surgery",
+    "swimming_pool",
+    "taxi_or_ride_share_service",
+    "technical_service",
+    "telecommunications_service",
+    "theatre_venue",
+    "toys_and_games_store",
+    "train_station",
+    "travel_and_transportation",
+    "travel_service",
+    "tutoring_service",
+    "vehicle_dealer",
+    "vehicle_parts_store",
+    "vehicle_service",
+    "vision_or_eye_care_clinic",
+    "walk_in_clinic",
+    "warehouse_club_store",
+    "wellness_service",
+    "wholesaler"
+  ],
+  "holdout_split": "80/20 grouped by normalized exact place name; identical names do not cross the split",
+  "holdout_accuracy": 0.48,
+  "holdout_top_3_accuracy": 0.6423,
+  "holdout_macro_f1": 0.3681,
+  "holdout_weighted_f1": 0.4959,
+  "per_category": {
+    "agricultural_service": {
+      "precision": 0.1053,
+      "recall": 0.2,
+      "f1": 0.1379,
+      "support": 10
+    },
+    "air_transport_facility_or_service": {
+      "precision": 0.0833,
+      "recall": 0.3333,
+      "f1": 0.1333,
+      "support": 3
+    },
+    "airport": {
+      "precision": 0.381,
+      "recall": 0.8889,
+      "f1": 0.5333,
+      "support": 9
+    },
+    "amusement_park": {
+      "precision": 0.1667,
+      "recall": 0.2,
+      "f1": 0.1818,
+      "support": 5
+    },
+    "animal_and_pet_store": {
+      "precision": 0.2963,
+      "recall": 0.3333,
+      "f1": 0.3137,
+      "support": 24
+    },
+    "animal_or_pet_service": {
+      "precision": 0.4894,
+      "recall": 0.6765,
+      "f1": 0.5679,
+      "support": 34
+    },
+    "apartment": {
+      "precision": 0.2679,
+      "recall": 0.4839,
+      "f1": 0.3448,
+      "support": 31
+    },
+    "art_gallery": {
+      "precision": 0.1111,
+      "recall": 0.2727,
+      "f1": 0.1579,
+      "support": 11
+    },
+    "arts_and_entertainment": {
+      "precision": 0.0789,
+      "recall": 0.4,
+      "f1": 0.1319,
+      "support": 15
+    },
+    "arts_crafts_and_hobby_store": {
+      "precision": 0.25,
+      "recall": 0.7083,
+      "f1": 0.3696,
+      "support": 24
+    },
+    "astrological_advising": {
+      "precision": 0.1875,
+      "recall": 1.0,
+      "f1": 0.3158,
+      "support": 3
+    },
+    "atm": {
+      "precision": 0.9013,
+      "recall": 0.9353,
+      "f1": 0.918,
+      "support": 371
+    },
+    "attorney_or_law_firm": {
+      "precision": 0.1714,
+      "recall": 0.6,
+      "f1": 0.2667,
+      "support": 10
+    },
+    "auto_dealer": {
+      "precision": 0.5159,
+      "recall": 0.5417,
+      "f1": 0.5285,
+      "support": 120
+    },
+    "automotive_service": {
+      "precision": 0.6118,
+      "recall": 0.5073,
+      "f1": 0.5547,
+      "support": 205
+    },
+    "b2b_energy_and_utility_service": {
+      "precision": 0.0028,
+      "recall": 0.375,
+      "f1": 0.0056,
+      "support": 16
+    },
+    "b2b_industrial_and_machine_service": {
+      "precision": 0.1091,
+      "recall": 0.3529,
+      "f1": 0.1667,
+      "support": 17
+    },
+    "b2b_office_and_professional_service": {
+      "precision": 0.15,
+      "recall": 0.1579,
+      "f1": 0.1538,
+      "support": 171
+    },
+    "b2b_science_and_technology_service": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 1
+    },
+    "b2b_service": {
+      "precision": 0.2174,
+      "recall": 0.1389,
+      "f1": 0.1695,
+      "support": 108
+    },
+    "b2b_transportation_and_storage_service": {
+      "precision": 0.3279,
+      "recall": 0.678,
+      "f1": 0.442,
+      "support": 59
+    },
+    "bank_or_credit_union": {
+      "precision": 0.9649,
+      "recall": 0.7192,
+      "f1": 0.8242,
+      "support": 1186
+    },
+    "bar": {
+      "precision": 0.2727,
+      "recall": 0.4074,
+      "f1": 0.3267,
+      "support": 81
+    },
+    "beach": {
+      "precision": 0.875,
+      "recall": 1.0,
+      "f1": 0.9333,
+      "support": 7
+    },
+    "bed_and_breakfast": {
+      "precision": 0.1389,
+      "recall": 0.4167,
+      "f1": 0.2083,
+      "support": 12
+    },
+    "behavioral_or_mental_health_clinic": {
+      "precision": 0.2069,
+      "recall": 0.3529,
+      "f1": 0.2609,
+      "support": 17
+    },
+    "books_music_and_video_store": {
+      "precision": 0.3415,
+      "recall": 0.5833,
+      "f1": 0.4308,
+      "support": 24
+    },
+    "brewery": {
+      "precision": 0.44,
+      "recall": 0.6875,
+      "f1": 0.5366,
+      "support": 16
+    },
+    "building_or_construction_service": {
+      "precision": 0.1207,
+      "recall": 0.1628,
+      "f1": 0.1386,
+      "support": 43
+    },
+    "cafe": {
+      "precision": 0.552,
+      "recall": 0.5188,
+      "f1": 0.5349,
+      "support": 133
+    },
+    "campus_building": {
+      "precision": 0.0312,
+      "recall": 0.02,
+      "f1": 0.0244,
+      "support": 50
+    },
+    "casual_eatery": {
+      "precision": 0.673,
+      "recall": 0.5753,
+      "f1": 0.6203,
+      "support": 186
+    },
+    "christian_place_of_worship": {
+      "precision": 0.8585,
+      "recall": 0.7583,
+      "f1": 0.8053,
+      "support": 120
+    },
+    "civic_organization": {
+      "precision": 0.2097,
+      "recall": 0.5909,
+      "f1": 0.3095,
+      "support": 22
+    },
+    "coffee_shop": {
+      "precision": 0.625,
+      "recall": 0.4444,
+      "f1": 0.5195,
+      "support": 45
+    },
+    "college_university": {
+      "precision": 0.5216,
+      "recall": 0.7406,
+      "f1": 0.6121,
+      "support": 212
+    },
+    "community_and_government": {
+      "precision": 0.0156,
+      "recall": 0.1429,
+      "f1": 0.0282,
+      "support": 7
+    },
+    "community_center": {
+      "precision": 0.125,
+      "recall": 0.25,
+      "f1": 0.1667,
+      "support": 8
+    },
+    "complementary_and_alternative_medicine": {
+      "precision": 0.3125,
+      "recall": 0.6122,
+      "f1": 0.4138,
+      "support": 49
+    },
+    "condominium": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 8
+    },
+    "corporate_or_business_office": {
+      "precision": 0.2581,
+      "recall": 0.0721,
+      "f1": 0.1127,
+      "support": 222
+    },
+    "cultural_center": {
+      "precision": 0.1471,
+      "recall": 0.5556,
+      "f1": 0.2326,
+      "support": 9
+    },
+    "dance_club": {
+      "precision": 0.0556,
+      "recall": 0.1429,
+      "f1": 0.08,
+      "support": 7
+    },
+    "dental_clinic": {
+      "precision": 0.878,
+      "recall": 0.8036,
+      "f1": 0.8392,
+      "support": 224
+    },
+    "department_store": {
+      "precision": 0.1463,
+      "recall": 0.375,
+      "f1": 0.2105,
+      "support": 16
+    },
+    "design_service": {
+      "precision": 0.075,
+      "recall": 0.4286,
+      "f1": 0.1277,
+      "support": 42
+    },
+    "diagnostics_imaging_or_lab_service": {
+      "precision": 0.6534,
+      "recall": 0.664,
+      "f1": 0.6586,
+      "support": 247
+    },
+    "education": {
+      "precision": 0.2329,
+      "recall": 0.1164,
+      "f1": 0.1553,
+      "support": 146
+    },
+    "educational_service": {
+      "precision": 0.2828,
+      "recall": 0.3636,
+      "f1": 0.3182,
+      "support": 77
+    },
+    "electronics_store": {
+      "precision": 0.5921,
+      "recall": 0.0642,
+      "f1": 0.1159,
+      "support": 2102
+    },
+    "elementary_school": {
+      "precision": 0.0526,
+      "recall": 0.0769,
+      "f1": 0.0625,
+      "support": 26
+    },
+    "environmental_or_ecological_service": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 3
+    },
+    "ev_charging_station": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 10
+    },
+    "event_or_party_service": {
+      "precision": 0.5686,
+      "recall": 0.3937,
+      "f1": 0.4652,
+      "support": 221
+    },
+    "event_venue": {
+      "precision": 0.2083,
+      "recall": 0.5,
+      "f1": 0.2941,
+      "support": 10
+    },
+    "family_service": {
+      "precision": 0.1538,
+      "recall": 0.1429,
+      "f1": 0.1481,
+      "support": 56
+    },
+    "farm": {
+      "precision": 0.2581,
+      "recall": 0.8889,
+      "f1": 0.4,
+      "support": 9
+    },
+    "fashion_and_apparel_store": {
+      "precision": 0.7747,
+      "recall": 0.3131,
+      "f1": 0.446,
+      "support": 725
+    },
+    "fast_food_restaurant": {
+      "precision": 0.6588,
+      "recall": 0.4392,
+      "f1": 0.5271,
+      "support": 255
+    },
+    "financial_service": {
+      "precision": 0.4297,
+      "recall": 0.8462,
+      "f1": 0.5699,
+      "support": 260
+    },
+    "fitness_studio": {
+      "precision": 0.6875,
+      "recall": 0.8148,
+      "f1": 0.7458,
+      "support": 27
+    },
+    "flowers_and_gifts_store": {
+      "precision": 0.3067,
+      "recall": 0.575,
+      "f1": 0.4,
+      "support": 40
+    },
+    "food_and_beverage_store": {
+      "precision": 0.3742,
+      "recall": 0.5545,
+      "f1": 0.4469,
+      "support": 110
+    },
+    "food_service": {
+      "precision": 0.0625,
+      "recall": 0.0909,
+      "f1": 0.0741,
+      "support": 11
+    },
+    "food_truck_stand": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 2
+    },
+    "fueling_station": {
+      "precision": 0.2336,
+      "recall": 0.9259,
+      "f1": 0.3731,
+      "support": 27
+    },
+    "gas_station": {
+      "precision": 0.2105,
+      "recall": 0.046,
+      "f1": 0.0755,
+      "support": 87
+    },
+    "government_office": {
+      "precision": 0.2737,
+      "recall": 0.5098,
+      "f1": 0.3562,
+      "support": 51
+    },
+    "gym": {
+      "precision": 0.8762,
+      "recall": 0.8762,
+      "f1": 0.8762,
+      "support": 202
+    },
+    "hardware_home_and_garden_store": {
+      "precision": 0.6939,
+      "recall": 0.25,
+      "f1": 0.3676,
+      "support": 408
+    },
+    "health_care": {
+      "precision": 0.1429,
+      "recall": 0.0317,
+      "f1": 0.0519,
+      "support": 63
+    },
+    "high_school": {
+      "precision": 0.52,
+      "recall": 0.65,
+      "f1": 0.5778,
+      "support": 60
+    },
+    "hindu_place_of_worship": {
+      "precision": 0.75,
+      "recall": 0.851,
+      "f1": 0.7973,
+      "support": 208
+    },
+    "historic_site": {
+      "precision": 0.3623,
+      "recall": 0.4386,
+      "f1": 0.3968,
+      "support": 171
+    },
+    "home_service": {
+      "precision": 0.6182,
+      "recall": 0.1153,
+      "f1": 0.1943,
+      "support": 590
+    },
+    "hospital": {
+      "precision": 0.8556,
+      "recall": 0.5347,
+      "f1": 0.6581,
+      "support": 288
+    },
+    "hotel": {
+      "precision": 0.681,
+      "recall": 0.4674,
+      "f1": 0.5543,
+      "support": 475
+    },
+    "lake": {
+      "precision": 0.5152,
+      "recall": 0.8947,
+      "f1": 0.6538,
+      "support": 19
+    },
+    "laundry_service": {
+      "precision": 0.8947,
+      "recall": 0.8947,
+      "f1": 0.8947,
+      "support": 19
+    },
+    "legal_service": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 7
+    },
+    "library": {
+      "precision": 0.3421,
+      "recall": 0.5,
+      "f1": 0.4062,
+      "support": 26
+    },
+    "lodging": {
+      "precision": 0.7823,
+      "recall": 0.548,
+      "f1": 0.6445,
+      "support": 177
+    },
+    "lounge": {
+      "precision": 0.0721,
+      "recall": 0.5,
+      "f1": 0.126,
+      "support": 16
+    },
+    "manufacturer": {
+      "precision": 0.2969,
+      "recall": 0.1818,
+      "f1": 0.2255,
+      "support": 209
+    },
+    "market": {
+      "precision": 0.4,
+      "recall": 1.0,
+      "f1": 0.5714,
+      "support": 4
+    },
+    "media_service": {
+      "precision": 0.2381,
+      "recall": 0.6122,
+      "f1": 0.3429,
+      "support": 49
+    },
+    "medical_service": {
+      "precision": 0.22,
+      "recall": 0.5,
+      "f1": 0.3056,
+      "support": 22
+    },
+    "movie_theater": {
+      "precision": 0.58,
+      "recall": 0.8286,
+      "f1": 0.6824,
+      "support": 35
+    },
+    "museum": {
+      "precision": 0.4286,
+      "recall": 0.75,
+      "f1": 0.5455,
+      "support": 4
+    },
+    "music_venue": {
+      "precision": 0.0794,
+      "recall": 0.2083,
+      "f1": 0.1149,
+      "support": 24
+    },
+    "musical_instrument_and_pro_audio_store": {
+      "precision": 0.3636,
+      "recall": 0.8,
+      "f1": 0.5,
+      "support": 5
+    },
+    "muslim_place_of_worship": {
+      "precision": 0.6875,
+      "recall": 0.9167,
+      "f1": 0.7857,
+      "support": 12
+    },
+    "natural_gas_utility_provider": {
+      "precision": 0.5833,
+      "recall": 0.7,
+      "f1": 0.6364,
+      "support": 10
+    },
+    "non_alcoholic_beverage_venue": {
+      "precision": 0.4815,
+      "recall": 0.65,
+      "f1": 0.5532,
+      "support": 20
+    },
+    "office_supply_store": {
+      "precision": 0.0909,
+      "recall": 0.1429,
+      "f1": 0.1111,
+      "support": 7
+    },
+    "outpatient_care_facility": {
+      "precision": 0.2063,
+      "recall": 0.2364,
+      "f1": 0.2203,
+      "support": 55
+    },
+    "park": {
+      "precision": 0.3973,
+      "recall": 0.8056,
+      "f1": 0.5321,
+      "support": 36
+    },
+    "pediatric_clinic": {
+      "precision": 0.3816,
+      "recall": 0.725,
+      "f1": 0.5,
+      "support": 40
+    },
+    "performing_arts_venue": {
+      "precision": 0.1136,
+      "recall": 0.3125,
+      "f1": 0.1667,
+      "support": 16
+    },
+    "personal_care_and_beauty_store": {
+      "precision": 0.5714,
+      "recall": 0.5854,
+      "f1": 0.5783,
+      "support": 41
+    },
+    "personal_or_beauty_service": {
+      "precision": 0.8,
+      "recall": 0.7262,
+      "f1": 0.7613,
+      "support": 336
+    },
+    "pharmacy_and_drug_store": {
+      "precision": 0.9041,
+      "recall": 0.9456,
+      "f1": 0.9244,
+      "support": 349
+    },
+    "physical_medicine_and_rehabilitation": {
+      "precision": 0.6531,
+      "recall": 0.8205,
+      "f1": 0.7273,
+      "support": 39
+    },
+    "place_of_learning": {
+      "precision": 0.6592,
+      "recall": 0.5526,
+      "f1": 0.6012,
+      "support": 371
+    },
+    "playground": {
+      "precision": 0.3333,
+      "recall": 0.5,
+      "f1": 0.4,
+      "support": 6
+    },
+    "police_station": {
+      "precision": 0.8696,
+      "recall": 0.9524,
+      "f1": 0.9091,
+      "support": 21
+    },
+    "preschool": {
+      "precision": 0.7406,
+      "recall": 0.7694,
+      "f1": 0.7548,
+      "support": 360
+    },
+    "printing_service": {
+      "precision": 0.1951,
+      "recall": 0.3478,
+      "f1": 0.25,
+      "support": 23
+    },
+    "private_lodging": {
+      "precision": 0.0769,
+      "recall": 0.1429,
+      "f1": 0.1,
+      "support": 14
+    },
+    "professional_service": {
+      "precision": 0.477,
+      "recall": 0.5754,
+      "f1": 0.5216,
+      "support": 325
+    },
+    "public_transit_facility_or_service": {
+      "precision": 0.4324,
+      "recall": 0.6154,
+      "f1": 0.5079,
+      "support": 26
+    },
+    "real_estate_service": {
+      "precision": 0.1443,
+      "recall": 0.3515,
+      "f1": 0.2046,
+      "support": 202
+    },
+    "religious_organization": {
+      "precision": 0.1833,
+      "recall": 0.25,
+      "f1": 0.2115,
+      "support": 44
+    },
+    "rental_service": {
+      "precision": 0.0833,
+      "recall": 0.3,
+      "f1": 0.1304,
+      "support": 10
+    },
+    "reproductive_perinatal_and_womens_care": {
+      "precision": 0.4065,
+      "recall": 0.6329,
+      "f1": 0.495,
+      "support": 79
+    },
+    "research_institute": {
+      "precision": 0.0566,
+      "recall": 0.3333,
+      "f1": 0.0968,
+      "support": 9
+    },
+    "resort": {
+      "precision": 0.507,
+      "recall": 0.7043,
+      "f1": 0.5896,
+      "support": 257
+    },
+    "restaurant": {
+      "precision": 0.7519,
+      "recall": 0.4667,
+      "f1": 0.576,
+      "support": 857
+    },
+    "second_hand_store": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 2
+    },
+    "security_service": {
+      "precision": 0.1667,
+      "recall": 0.5,
+      "f1": 0.25,
+      "support": 2
+    },
+    "senior_living_facility": {
+      "precision": 0.2121,
+      "recall": 0.4118,
+      "f1": 0.28,
+      "support": 17
+    },
+    "shipping_or_delivery_service": {
+      "precision": 0.3158,
+      "recall": 0.6,
+      "f1": 0.4138,
+      "support": 10
+    },
+    "shopping": {
+      "precision": 0.7439,
+      "recall": 0.3177,
+      "f1": 0.4453,
+      "support": 384
+    },
+    "shopping_mall": {
+      "precision": 0.1918,
+      "recall": 0.25,
+      "f1": 0.2171,
+      "support": 56
+    },
+    "smoothie_juice_bar": {
+      "precision": 0.3333,
+      "recall": 0.6923,
+      "f1": 0.45,
+      "support": 13
+    },
+    "social_or_community_service": {
+      "precision": 0.2353,
+      "recall": 0.2353,
+      "f1": 0.2353,
+      "support": 51
+    },
+    "specialized_health_care": {
+      "precision": 0.5203,
+      "recall": 0.554,
+      "f1": 0.5366,
+      "support": 139
+    },
+    "specialized_medical_facility": {
+      "precision": 0.2258,
+      "recall": 0.875,
+      "f1": 0.359,
+      "support": 8
+    },
+    "specialty_school": {
+      "precision": 0.562,
+      "recall": 0.3649,
+      "f1": 0.4425,
+      "support": 211
+    },
+    "specialty_store": {
+      "precision": 0.4615,
+      "recall": 0.4865,
+      "f1": 0.4737,
+      "support": 37
+    },
+    "sport_court": {
+      "precision": 0.4615,
+      "recall": 0.5217,
+      "f1": 0.4898,
+      "support": 23
+    },
+    "sport_league": {
+      "precision": 0.2745,
+      "recall": 0.4828,
+      "f1": 0.35,
+      "support": 29
+    },
+    "sport_or_fitness_facility": {
+      "precision": 0.5606,
+      "recall": 0.3491,
+      "f1": 0.4302,
+      "support": 106
+    },
+    "sport_or_recreation_club": {
+      "precision": 0.08,
+      "recall": 0.7778,
+      "f1": 0.1451,
+      "support": 18
+    },
+    "sporting_goods_store": {
+      "precision": 0.4286,
+      "recall": 0.5294,
+      "f1": 0.4737,
+      "support": 51
+    },
+    "sports_and_recreation": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 9
+    },
+    "stadium_arena": {
+      "precision": 0.3333,
+      "recall": 0.4643,
+      "f1": 0.3881,
+      "support": 28
+    },
+    "storage_facility": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 4
+    },
+    "supplier_or_distributor": {
+      "precision": 0.2471,
+      "recall": 0.2283,
+      "f1": 0.2373,
+      "support": 92
+    },
+    "surgery": {
+      "precision": 0.4444,
+      "recall": 0.5556,
+      "f1": 0.4938,
+      "support": 36
+    },
+    "swimming_pool": {
+      "precision": 0.3333,
+      "recall": 0.4286,
+      "f1": 0.375,
+      "support": 7
+    },
+    "taxi_or_ride_share_service": {
+      "precision": 0.3333,
+      "recall": 0.5,
+      "f1": 0.4,
+      "support": 6
+    },
+    "technical_service": {
+      "precision": 0.3141,
+      "recall": 0.2899,
+      "f1": 0.3015,
+      "support": 207
+    },
+    "telecommunications_service": {
+      "precision": 0.2,
+      "recall": 0.0036,
+      "f1": 0.007,
+      "support": 279
+    },
+    "theatre_venue": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 4
+    },
+    "toys_and_games_store": {
+      "precision": 0.1538,
+      "recall": 0.5,
+      "f1": 0.2353,
+      "support": 4
+    },
+    "train_station": {
+      "precision": 0.36,
+      "recall": 0.75,
+      "f1": 0.4865,
+      "support": 12
+    },
+    "travel_and_transportation": {
+      "precision": 0.0556,
+      "recall": 0.1053,
+      "f1": 0.0727,
+      "support": 19
+    },
+    "travel_service": {
+      "precision": 0.6164,
+      "recall": 0.6429,
+      "f1": 0.6294,
+      "support": 70
+    },
+    "tutoring_service": {
+      "precision": 0.9903,
+      "recall": 0.9833,
+      "f1": 0.9868,
+      "support": 1140
+    },
+    "vehicle_dealer": {
+      "precision": 0.549,
+      "recall": 0.5895,
+      "f1": 0.5685,
+      "support": 95
+    },
+    "vehicle_parts_store": {
+      "precision": 0.0984,
+      "recall": 0.2857,
+      "f1": 0.1463,
+      "support": 21
+    },
+    "vehicle_service": {
+      "precision": 0.087,
+      "recall": 0.2,
+      "f1": 0.1212,
+      "support": 10
+    },
+    "vision_or_eye_care_clinic": {
+      "precision": 0.2439,
+      "recall": 0.7407,
+      "f1": 0.367,
+      "support": 27
+    },
+    "walk_in_clinic": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 1
+    },
+    "warehouse_club_store": {
+      "precision": 0.0588,
+      "recall": 0.4,
+      "f1": 0.1026,
+      "support": 10
+    },
+    "wellness_service": {
+      "precision": 0.6471,
+      "recall": 0.4508,
+      "f1": 0.5314,
+      "support": 122
+    },
+    "wholesaler": {
+      "precision": 0.0484,
+      "recall": 0.0857,
+      "f1": 0.0619,
+      "support": 35
+    }
+  },
+  "limitations": [
+    "Predicts Overture taxonomy labels from place names; it does not predict demand, revenue, profit, or business success.",
+    "Training coverage is limited to the cities and release present in the input CSV; language and naming patterns may not generalize to other cities.",
+    "Model probabilities are ranking signals, not calibrated confidence. Review low-confidence or consequential classifications manually.",
+    "Overture source existence confidence is not a calibrated probability and does not measure category correctness."
+  ]
+}
