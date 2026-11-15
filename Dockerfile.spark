@@ -1,0 +1,6 @@
+FROM apache/spark:3.5.7-scala2.12-java17-python3-ubuntu
+
+USER root
+COPY bigdata/spark_etl.py /opt/spotwise/spark_etl.py
+RUN chown -R 185:0 /opt/spotwise
+USER 185

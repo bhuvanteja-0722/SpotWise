@@ -1,6 +1,6 @@
 # SpotWise
 
-SpotWise is a full-stack big data analysis project for researching where to open a local business. A responsive dark-mode website calls a FastAPI backend, reads the prepared Kaggle analysis, stores user studies and uploaded local signals in SQLite, and calculates transparent break-even and location-readiness scenarios.
+SpotWise is a full-stack big data analysis project for researching where to open a local business. A responsive dark-mode website calls a FastAPI backend, reads prepared Kaggle analysis, stores website studies and imported local signals in SQLite, and calculates transparent break-even and location-readiness scenarios. An optional distributed batch pipeline uses Apache Spark to clean and aggregate large signal files, HDFS to retain curated Parquet data, and Apache Cassandra to serve area-level summary records.
 
 ## What it does
 
@@ -17,7 +17,50 @@ SpotWise is a full-stack big data analysis project for researching where to open
 
 SpotWise uses a dark, low-glare workspace with a lime accent, muted green surfaces, and readable type. The layout groups the work into a clear path: select a market and business, review local context, check workforce and transport signals, model break-even, then save or compare studies. Cards, data-source badges, freshness notes, and empty states help distinguish observed data from user assumptions. The interface adapts to desktop and mobile widths, supports an optional light theme, and includes visible keyboard focus and reduced-motion support.
 
-The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. The backend uses FastAPI, SQLAlchemy, scikit-learn/joblib, PyArrow, and DuckDB for cloud-querying large Overture GeoParquet releases. `requirements.txt` lists the Python packages.
+The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. The regular website backend uses FastAPI, SQLAlchemy, SQLite, scikit-learn/joblib, PyArrow, and DuckDB for bounded cloud queries on Overture GeoParquet. The optional batch stack is Spark 3.5.7 (PySpark) + HDFS 3.5.0 + Cassandra 5.0.9 with the Apache Spark Cassandra Connector 3.5.1. It is separate from the lightweight default website, and does not require its large containers for normal use. `requirements.txt` is for the regular web app; the Spark runtime and connector are provided by the optional Docker services.
+
+## Big data pipeline: Spark, HDFS, and Cassandra
+
+The optional stack performs a real distributed batch job; these tools are not merely listed as technologies. Standardized local signal files are copied into HDFS, Spark validates and cleans the rows, removes exact duplicates, writes city/category-partitioned Parquet back to HDFS, then aggregates by city, area, signal category, metric, and unit into Cassandra. Spark uses the Apache Cassandra connector, pinned to a release compatible with Spark 3.5, Scala 2.12, and Cassandra 5.0. [Spark standalone clusters](https://spark.apache.org/docs/3.5.7/spark-standalone.html) distribute tasks across workers; the [connector](https://github.com/apache/cassandra-spark-connector) writes Spark DataFrames to Cassandra. Read about [HDFS](https://hadoop.apache.org/docs/current3/hadoop-project-dist/hadoop-hdfs/HdfsUserGuide.html) and [Cassandra](https://cassandra.apache.org/doc/stable/cassandra/getting-started/) from their official documentation.
+
+```mermaid
+flowchart LR
+  A[Standardized CSV or Parquet] --> B[HDFS raw zone]
+  B --> C[Spark cleanup and aggregation]
+  C --> D[HDFS curated Parquet]
+  C --> E[Cassandra area summaries]
+  F[FastAPI website] --> G[SQLite request-time store]
+  F -->|Big data summaries endpoint| E
+```
+
+The large services are opt-in because they use substantially more memory and disk than this class-project website. Install Docker Desktop/Engine with Compose v2, then supply a CSV or Parquet file with at least `city,value`; optional columns are `area,category,metric,unit,name,detail,observed_at,latitude,longitude`. If the file lacks a category or metric column, set them as arguments. Example:
+
+```bash
+docker compose up -d spotwise
+./scripts/run_bigdata_pipeline.sh data/raw/my_footfall.csv footfall pedestrians_per_hour
+```
+
+The script starts the optional services, stages the input to HDFS, creates the Cassandra table, submits the Spark job, and prints the HDFS output location. The website's optional `GET /api/v1/bigdata/summaries?city=Bengaluru&category=footfall` endpoint reads those area summaries from Cassandra. Docker Compose configures the website container to connect to the `cassandra` service. If running FastAPI directly on your computer, start the profile services and launch it with `SPOTWISE_CASSANDRA_CONTACT_POINTS=127.0.0.1 python3 run.py`. Use `docker compose --profile bigdata up -d` to start the stack manually; Spark UI is at [http://localhost:8088](http://localhost:8088), HDFS NameNode UI at [http://localhost:9870](http://localhost:9870), and Spark worker UI at [http://localhost:8081](http://localhost:8081). Query summaries with `docker compose --profile bigdata exec cassandra cqlsh -e 'SELECT * FROM spotwise.area_signal_summary;'`. Stop optional services with `docker compose --profile bigdata down`; add `-v` only if you intentionally want to delete the HDFS and Cassandra stored volumes.
+
+This is a single-node teaching setup with one HDFS DataNode and one Spark worker, not a fault-tolerant production cluster. HDFS replication is 1. The live dashboard's current interactive imports and location scores still use SQLite; Spark's summaries can be inspected in the UI/API endpoint described above and in Cassandra. This keeps the core app usable without a running distributed cluster while making the distributed batch workflow part of the project. No user API key is needed.
+
+### What the Spark job cleans and outputs
+
+The Spark job standardizes text labels, fills absent areas as `Citywide`, parses numeric values and timestamps, discards rows without a city/category/metric or valid numeric value, and removes exact duplicates. It writes cleaned observations as Parquet partitioned by city/category under `/spotwise/curated/<run-id>` and upserts group summaries into Cassandra table `spotwise.area_signal_summary`. Summary values include record count, average, approximate median, total, minimum, maximum, and refresh time. Coordinate values are kept when present; this teaching ETL does not claim to calculate travel times, infer pedestrian counts, or guarantee that input units/source quality are valid. Inspect source dates, units, categories, licenses, and row counts before using results for a decision.
+
+### Dataset inventory: sources actually used
+
+These are the external source datasets used to build the current analysis or trained models. The links go to the original dataset/provider pages; rows stored in ignored local files/database are not automatically included in a Git clone.
+
+| Dataset used | Link | How SpotWise uses it | Main limitation |
+| --- | --- | --- | --- |
+| Property Rental Listings Dataset (23,405 records) | [Kaggle dataset](https://www.kaggle.com/datasets/harshalhonde/property-rental-listings-dataset) | Prepared Mumbai neighborhood residential asking-rent summaries; includes the locality chart and median context. | 2023 snapshot; scraped residential listings, not current commercial lease offers. |
+| Indian Job Market Dataset 2025–2026 (97,929 postings) | [Kaggle dataset](https://www.kaggle.com/datasets/shivamshrivastava21/indian-job-market-dataset-2025-2026) | City and role-group job posting summaries and the trained salary range benchmark (33,203 disclosed INR salary rows after cleaning). | Online postings are not the available workforce; salary data is disclosed for only a subset; CC BY-NC-SA 4.0. |
+| Indian Railways Time Table for Trains (69,006 schedule rows) | [Kaggle dataset](https://www.kaggle.com/datasets/harsh16/indian-railways-time-table-for-trains-available) | Historical city-level station/service schedule context. | 2015 snapshot; city matches inferred from station names; it does not represent current local metro service. |
+| Overture Maps Places release `2026-10-21.0` (about 77,958 Bengaluru records used for classifier training) | [Places data guide](https://docs.overturemaps.org/guides/places/) · [Cloud download/query guide](https://docs.overturemaps.org/guides/using-overture/) · [Attribution and licensing](https://docs.overturemaps.org/guides/attribution/) | Trains the name-to-category helper. A separate local import has 2,136 Bengaluru restaurant records at existence-confidence ≥0.85, used as a weighted listing-density proxy. | Monthly global map data with upstream-source variation and duplicate/incomplete place records. Existence confidence is not calibrated demand or footfall. Follow Overture attribution terms. |
+| Namma Metro GTFS feed version `20260817` | [Feed and source notes](https://metroroute.net/data-sources) | Local import contains 170 geocoded station/stop observations for transit access context. | Community-transcribed schedule; intermediate stop times are estimated. It is not passenger ridership or real-time service. |
+
+SpotWise also documents **candidate** sources in the Data Coverage and Recommended Dataset Expansion sections below. A source candidate or link is not counted as a dataset used until its records are actually obtained, cleaned, scoped to a city, and imported. The Spark batch workflow accepts user-provided standardized CSV/Parquet signal files; it does not automatically download Kaggle datasets or include raw licensed files in Git.
 
 ## Run the full website and backend
 
@@ -49,6 +92,7 @@ For a different database, set `DATABASE_URL`. SQLite is the default for a single
 | `GET /api/v1/dashboard?city=Mumbai&area=Powai` | Kaggle aggregates, market context, and matching local signals |
 | `GET /api/v1/signals?city=Mumbai&area=Powai&radius_km=1&latitude=19.1&longitude=72.8` | Local imported signal aggregates and radius filtering |
 | `GET /api/v1/data-sources` | Kaggle sources and locally imported batches |
+| `GET /api/v1/bigdata/summaries?city=Bengaluru&category=footfall` | Read Spark-produced area summaries from Cassandra when configured |
 | `GET /api/v1/transport-sources?city=Bengaluru` | Current transit source links for a selected city |
 | `POST /api/v1/datasets/preview` | Scan and preview CSV, XLSX, JSON, JSONL/NDJSON, Parquet, or static GTFS ZIP data |
 | `POST /api/v1/datasets/import` | Clean, normalize, and persist a local signal dataset |

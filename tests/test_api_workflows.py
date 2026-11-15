@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -186,6 +187,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(invalid_file.status_code, 200)
         self.assertEqual(invalid_file.json()["clean_rows"], 0)
         self.assertGreater(invalid_file.json()["skipped_invalid_rows"], 0)
+
+    def test_bigdata_endpoint_is_clear_when_optional_store_is_disabled(self):
+        with patch.dict(os.environ, {"SPOTWISE_CASSANDRA_CONTACT_POINTS": ""}):
+            response = self.client.get("/api/v1/bigdata/summaries", params={"city": "Bengaluru", "category": "footfall"})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("not configured", response.json()["detail"])
 
 
 if __name__ == "__main__":

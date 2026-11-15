@@ -21,6 +21,7 @@ from .transit_sources import sources_for_city
 
 MAX_UPLOAD_BYTES = int(os.getenv("SPOTWISE_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 MAX_UPLOAD_ROWS = int(os.getenv("SPOTWISE_MAX_UPLOAD_ROWS", "100000"))
+_cassandra_cluster = None
 CITY_LEVEL_AREA_ALIASES = {
     "bengaluru": {"bengaluru", "bangalore", "banglore"},
     "mumbai": {"mumbai", "bombay"},
@@ -62,6 +63,24 @@ def get_data() -> dict:
         return load_analysis()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def get_cassandra_session():
+    """Create a lazy, process-wide Cassandra session when the optional store is configured."""
+    global _cassandra_cluster
+    contact_points = [value.strip() for value in os.getenv("SPOTWISE_CASSANDRA_CONTACT_POINTS", "").split(",") if value.strip()]
+    if not contact_points:
+        raise HTTPException(status_code=503, detail="The distributed summary store is not configured. Set SPOTWISE_CASSANDRA_CONTACT_POINTS to enable it.")
+    try:
+        from cassandra.cluster import Cluster
+        if _cassandra_cluster is None:
+            port = int(os.getenv("SPOTWISE_CASSANDRA_PORT", "9042"))
+            _cassandra_cluster = Cluster(contact_points, port=port, connect_timeout=3)
+        return _cassandra_cluster.connect("spotwise")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Cassandra is unavailable or its SpotWise schema has not been initialized.") from exc
 
 
 def as_public_batch(batch: SignalBatch) -> dict:
@@ -189,6 +208,34 @@ def signals(
 def data_sources(session: Session = Depends(get_session), data: dict = Depends(get_data)):
     uploaded = list(session.scalars(select(SignalBatch).order_by(SignalBatch.imported_at.desc())))
     return {"kaggle_sources": data.get("sources", []), "uploaded_sources": [as_public_batch(item) for item in uploaded]}
+
+
+@app.get("/api/v1/bigdata/summaries", tags=["big data pipeline"])
+def bigdata_summaries(
+    city: str = Query(min_length=2, max_length=90),
+    category: str = Query(min_length=2, max_length=40),
+):
+    """Read the Spark-produced, area-level summary from optional Cassandra storage."""
+    session = get_cassandra_session()
+    try:
+        rows = session.execute(
+            "SELECT city, category, metric, area, unit, record_count, average_value, median_value, total_value, minimum_value, maximum_value, refreshed_at "
+            "FROM area_signal_summary WHERE city = %s AND category = %s",
+            (city, category.casefold()),
+        )
+        return {"city": city, "category": category.casefold(), "items": [
+            {
+                "city": row.city, "category": row.category, "metric": row.metric,
+                "area": row.area, "unit": row.unit, "record_count": row.record_count,
+                "average_value": row.average_value, "median_value": row.median_value,
+                "total_value": row.total_value, "minimum_value": row.minimum_value,
+                "maximum_value": row.maximum_value,
+                "refreshed_at": row.refreshed_at.isoformat() if row.refreshed_at else None,
+            }
+            for row in rows
+        ]}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Could not read the requested Cassandra summaries. Check its status, schema, and city/category values.") from exc
 
 
 def _read_and_clean_upload(category: str, filename: str, content: bytes, skip_duplicates: bool, normalize_labels: bool, dataset_city: str | None = None) -> dict:
