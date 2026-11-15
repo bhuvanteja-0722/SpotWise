@@ -5,4 +5,111 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+    environment:
+      SPOTWISE_CASSANDRA_CONTACT_POINTS: ${SPOTWISE_CASSANDRA_CONTACT_POINTS:-cassandra}
     restart: unless-stopped
+
+  # Optional distributed data stack. Start with:
+  # docker compose --profile bigdata up -d
+  hdfs-namenode:
+    image: apache/hadoop:3.5.0
+    profiles: [bigdata]
+    hostname: namenode
+    command: ["bash", "-lc", "if [ ! -f /hadoop/dfs/name/current/VERSION ]; then hdfs namenode -format -nonInteractive; fi; hdfs namenode"]
+    ports:
+      - "9870:9870"
+    volumes:
+      - hdfs-name:/hadoop/dfs/name
+      - ./bigdata/hadoop/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./bigdata/hadoop/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    restart: unless-stopped
+
+  hdfs-datanode:
+    image: apache/hadoop:3.5.0
+    profiles: [bigdata]
+    hostname: datanode
+    command: ["hdfs", "datanode"]
+    depends_on:
+      - hdfs-namenode
+    volumes:
+      - hdfs-data:/hadoop/dfs/data
+      - ./bigdata/hadoop/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./bigdata/hadoop/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    restart: unless-stopped
+
+  hdfs-client:
+    image: apache/hadoop:3.5.0
+    profiles: [bigdata]
+    entrypoint: ["bash", "-lc"]
+    command: ["hdfs dfs -ls hdfs://namenode:9000/"]
+    volumes:
+      - ./bigdata/hadoop/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./bigdata/hadoop/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    depends_on:
+      - hdfs-namenode
+
+  cassandra:
+    image: cassandra:5.0.9
+    profiles: [bigdata]
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      - ./bigdata/cassandra/schema.cql:/opt/spotwise/schema.cql:ro
+    environment:
+      CASSANDRA_CLUSTER_NAME: spotwise-local
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh 127.0.0.1 -e 'DESCRIBE CLUSTER' >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+
+  spark-master:
+    image: apache/spark:3.5.7-scala2.12-java17-python3-ubuntu
+    profiles: [bigdata]
+    hostname: spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
+    ports:
+      - "8088:8080"
+      - "7077:7077"
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+    restart: unless-stopped
+
+  spark-worker:
+    image: apache/spark:3.5.7-scala2.12-java17-python3-ubuntu
+    profiles: [bigdata]
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "--host", "spark-worker", "--webui-port", "8081", "spark://spark-master:7077"]
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_NO_DAEMONIZE: "true"
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+  spark-submit:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    profiles: [bigdata]
+    hostname: spark-submit
+    entrypoint: ["/opt/spark/bin/spark-submit"]
+    command: ["--version"]
+    depends_on:
+      - spark-worker
+      - cassandra
+      - hdfs-namenode
+    volumes:
+      - ./bigdata:/opt/spotwise/bigdata:ro
+
+volumes:
+  hdfs-name:
+  hdfs-data:
+  cassandra-data:
