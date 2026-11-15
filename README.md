@@ -15,7 +15,7 @@ SpotWise is a full-stack big data analysis project for researching where to open
 
 ## Interface and frontend design
 
-SpotWise uses a dark, low-glare workspace with a lime accent, muted green surfaces, and readable type. The layout groups the work into a clear path: select a market and business, review local context, check workforce and transport signals, model break-even, then save or compare studies. Cards, data-source badges, freshness notes, and empty states help distinguish observed data from user assumptions. The interface adapts to desktop and mobile widths, supports an optional light theme, and includes visible keyboard focus and reduced-motion support.
+SpotWise uses a dark, low-glare workspace with a lime accent, muted green surfaces, and Plus Jakarta Sans / Space Grotesk typography. A perspective-based orbital hero, layered cards, gentle hover depth, and restrained glow add 3D character while keeping the analysis controls legible. The layout groups the work into a clear path: select a market and business, review local context, check workforce and transport signals, model break-even, then save or compare studies. Cards, data-source badges, freshness notes, and empty states help distinguish observed data from user assumptions. The interface adapts to desktop and mobile widths, supports an optional light theme, and includes visible keyboard focus and reduced-motion support.
 
 The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. The regular website backend uses FastAPI, SQLAlchemy, SQLite, scikit-learn/joblib, PyArrow, and DuckDB for bounded cloud queries on Overture GeoParquet. The optional batch stack is Spark 3.5.7 (PySpark) + HDFS 3.5.0 + Cassandra 5.0.9 with the Apache Spark Cassandra Connector 3.5.1. It is separate from the lightweight default website, and does not require its large containers for normal use. `requirements.txt` is for the regular web app; the Spark runtime and connector are provided by the optional Docker services.
 
@@ -42,11 +42,51 @@ docker compose up -d spotwise
 
 The script starts the optional services, stages the input to HDFS, creates the Cassandra table, submits the Spark job, and prints the HDFS output location. The website's optional `GET /api/v1/bigdata/summaries?city=Bengaluru&category=footfall` endpoint reads those area summaries from Cassandra. Docker Compose configures the website container to connect to the `cassandra` service. If running FastAPI directly on your computer, start the profile services and launch it with `SPOTWISE_CASSANDRA_CONTACT_POINTS=127.0.0.1 python3 run.py`. Use `docker compose --profile bigdata up -d` to start the stack manually; Spark UI is at [http://localhost:8088](http://localhost:8088), HDFS NameNode UI at [http://localhost:9870](http://localhost:9870), and Spark worker UI at [http://localhost:8081](http://localhost:8081). Query summaries with `docker compose --profile bigdata exec cassandra cqlsh -e 'SELECT * FROM spotwise.area_signal_summary;'`. Stop optional services with `docker compose --profile bigdata down`; add `-v` only if you intentionally want to delete the HDFS and Cassandra stored volumes.
 
+### Where each big-data tool is used
+
+| Tool | SpotWise workflow | What it does not do |
+| --- | --- | --- |
+| HDFS | The pipeline stages each input under `/spotwise/raw/<run-id>` and writes cleaned, city/category-partitioned Parquet under `/spotwise/curated/<run-id>`. | HDFS is not the default website database and does not host the bundled Kaggle aggregates. |
+| Apache Spark | `bigdata/spark_etl.py` reads the staged CSV/Parquet in parallel, standardizes city/area labels, rejects unusable numeric rows, removes exact duplicates, writes curated Parquet, and computes area summaries. | Spark is not involved in each normal dashboard request; it runs only when the optional batch command is executed. |
+| Apache Cassandra | Spark writes summary rows to `spotwise.area_signal_summary`; `GET /api/v1/bigdata/summaries` reads them when Cassandra is configured. | Cassandra does not currently replace SQLite for saved studies or interactive imports. |
+| SQLite | The normal FastAPI workflow stores imported observations, source batches, and saved studies here. | SQLite is suitable for this class-project setup, not a distributed high-write store. |
+
+The optional pipeline now canonicalizes common city names and aliases (for example, `BANGALORE`, `Bangalore`, and `Bengaluru` all become `Bengaluru`), collapses repeated whitespace, maps blank areas to `Citywide`, and excludes null, NaN, or infinite values. Malformed numeric strings become null via Spark's [`try_cast`](https://spark.apache.org/docs/3.5.7/sql-ref-ansi-compliance.html); invalid timestamps become null via [`try_to_timestamp`](https://spark.apache.org/docs/3.5.7/api/python/reference/pyspark.sql/api/pyspark.sql.functions.try_to_timestamp.html) rather than dropping an otherwise usable observation. It reports input, invalid, exact-duplicate, and output row counts. Invalid coordinates become null. The approximate median uses Spark's `percentile_approx` with accuracy parameter 10,000, so it is an approximation rather than an exact percentile. A repeated run updates Cassandra rows with matching `(city, category, metric, area, unit)` keys; its separate HDFS output remains under that run's ID.
+
+### Worked example and verification results
+
+This miniature CSV illustrates the cleanup behavior; the numeric output below is calculated from these six example rows, not a claim that the distributed cluster was run:
+
+```csv
+city,area,category,metric,value,unit
+BANGALORE,Indiranagar,footfall,visitors_per_hour,120,people/hour
+Bengaluru,Indiranagar,footfall,visitors_per_hour,180,people/hour
+Bengaluru,Indiranagar,footfall,visitors_per_hour,240,people/hour
+Bengaluru,Indiranagar,footfall,visitors_per_hour,180,people/hour
+Bengaluru,,footfall,visitors_per_hour,90,people/hour
+Bengaluru,Indiranagar,footfall,visitors_per_hour,not-a-number,people/hour
+```
+
+After city normalization, the exact duplicate, and invalid-value filtering, Spark would report `input=6`, `invalid=1`, `exact_duplicates=1`, `output=4`. Cassandra would receive two groups: `Bengaluru / Indiranagar` with 3 records, average 180, median 180, total 540, min 120, max 240; and `Bengaluru / Citywide` with 1 record and value 90. The three distinct Indiranagar values make the example median unambiguous. The city aliases ensure the area summaries use the same city key that the dashboard and API expect.
+
+The regular website workflow is exercised using disposable test data. As of this README update, `python3 -m unittest discover -s tests -v` passes **4 tests**. Coverage includes: previewing a CSV with one valid row, one duplicate, and one invalid value (expected preview counts: `clean_rows=1`, `duplicates_removed=1`, `skipped_invalid_rows=1`); importing CSV, XLSX, JSON, JSONL, Parquet, and static GTFS; filtering competitors by selected business type; rejecting malformed uploads and incomplete coordinates; salary and category model endpoints; and creating, updating, comparing, and deleting saved studies. These are backend/API regression results, not load tests or a Spark cluster integration run.
+
+**Environment limitation:** the current workspace does not have Docker or PySpark installed, so the Spark/HDFS/Cassandra containers and connector cannot be executed or certified here. Their Compose wiring, Spark script, Cassandra schema, and API integration are present in the repository, but the example above is a hand-calculated expected result. To verify the distributed path on a machine with Docker, run the command in the next example section against that CSV and then query Cassandra and the API endpoint.
+
+To run the exact six-row example, save the CSV above as `/tmp/spotwise-demo.csv`, then run:
+
+```bash
+./scripts/run_bigdata_pipeline.sh /tmp/spotwise-demo.csv footfall visitors_per_hour
+docker compose --profile bigdata exec cassandra cqlsh -e \
+  "SELECT city,area,metric,unit,record_count,average_value,median_value,total_value FROM spotwise.area_signal_summary WHERE city='Bengaluru' AND category='footfall';"
+curl 'http://127.0.0.1:8000/api/v1/bigdata/summaries?city=Bengaluru&category=footfall'
+```
+
 This is a single-node teaching setup with one HDFS DataNode and one Spark worker, not a fault-tolerant production cluster. HDFS replication is 1. The live dashboard's current interactive imports and location scores still use SQLite; Spark's summaries can be inspected in the UI/API endpoint described above and in Cassandra. This keeps the core app usable without a running distributed cluster while making the distributed batch workflow part of the project. No user API key is needed.
 
 ### What the Spark job cleans and outputs
 
-The Spark job standardizes text labels, fills absent areas as `Citywide`, parses numeric values and timestamps, discards rows without a city/category/metric or valid numeric value, and removes exact duplicates. It writes cleaned observations as Parquet partitioned by city/category under `/spotwise/curated/<run-id>` and upserts group summaries into Cassandra table `spotwise.area_signal_summary`. Summary values include record count, average, approximate median, total, minimum, maximum, and refresh time. Coordinate values are kept when present; this teaching ETL does not claim to calculate travel times, infer pedestrian counts, or guarantee that input units/source quality are valid. Inspect source dates, units, categories, licenses, and row counts before using results for a decision.
+The Spark job canonicalizes common city aliases, standardizes area/category/metric/unit labels, fills absent areas as `Citywide`, parses numeric values and timestamps, excludes rows with missing city/category/metric or null/NaN/infinite values, and removes exact duplicates. Invalid coordinates and timestamps become null while the rest of the row remains usable. It writes cleaned observations as Parquet partitioned by city/category under `/spotwise/curated/<run-id>` and upserts group summaries into Cassandra table `spotwise.area_signal_summary`. Summary values include record count, average, approximate median, total, minimum, maximum, and refresh time. Coordinate values are kept when valid; this teaching ETL does not claim to calculate travel times, infer pedestrian counts, or guarantee that input units/source quality are valid. Inspect source dates, units, categories, licenses, and row counts before using results for a decision.
 
 ### Dataset inventory: sources actually used
 
@@ -204,6 +244,18 @@ Example request to `/api/v1/business/classify`:
 ```
 
 The API returns up to three category suggestions and uncalibrated model scores for each name. A low holdout score means suggestions need human review. The model is not for business success, demand, or revenue prediction.
+
+### Measured model performance and accuracy limits
+
+These are held-out evaluation results from the checked-in model reports, not guarantees for future neighborhoods or business outcomes:
+
+| Model | Evaluation result | How to interpret it |
+| --- | --- | --- |
+| Salary benchmark | Grouped holdout median absolute error ₹102,409/year; MAE ₹274,469/year; R² 0.523; median absolute percentage error 23.55%; empirical 90% interval coverage 89.98%. | Typical estimates can be far from a real offer. Use the wide range as a planning signal; validate against current local hiring quotes. |
+| Place-name classifier | Grouped holdout top-1 accuracy 48.0%; top-3 accuracy 64.2%; macro F1 0.368 over 158 categories. | It is a review aid for listing cleanup. The modest accuracy and Bengaluru-only training mean a human should confirm every material classification. |
+| Location readiness | No measured predictive accuracy. | This is an equal-weight, user-target comparison heuristic. No verified open business profit/survival labels were available to train and evaluate a success model. |
+
+The project does not currently have a valid, representative holdout set for customer footfall, commercial rent, parking occupancy, traffic speed, worker availability, revenue, or business survival. Therefore it cannot claim high predictive accuracy for those outcomes. Improving reliability requires recent, licensed, geocoded records plus outcome labels and a time- or geography-held-out evaluation; adding more unrelated rows would not make the estimate more accurate.
 
 Training and evaluating the classifier uses the larger, multi-category Overture query:
 

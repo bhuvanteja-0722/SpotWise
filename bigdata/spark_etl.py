@@ -10,6 +10,15 @@ OPTIONAL_COLUMNS = {
     "area": "Citywide", "category": None, "metric": "value", "unit": "count",
     "name": None, "detail": None, "observed_at": None, "latitude": None, "longitude": None,
 }
+CITY_ALIASES = {
+    "bengaluru": "Bengaluru", "bangalore": "Bengaluru",
+    "mumbai": "Mumbai", "bombay": "Mumbai",
+    "hyderabad": "Hyderabad", "secunderabad": "Hyderabad",
+    "pune": "Pune", "chennai": "Chennai", "madras": "Chennai",
+    "delhi ncr": "Delhi NCR", "delhi": "Delhi NCR", "new delhi": "Delhi NCR",
+    "gurugram": "Delhi NCR", "gurgaon": "Delhi NCR", "noida": "Delhi NCR",
+    "kolkata": "Kolkata", "calcutta": "Kolkata", "ahmedabad": "Ahmedabad",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,30 +55,45 @@ def main() -> None:
                 selected.append(F.lit(args.metric).alias(name))
             else:
                 selected.append(F.lit(default).cast("string").alias(name))
-        selected.append(F.col(columns["value"]).cast("double").alias("value"))
+        selected.append(F.col(columns["value"]).cast("string").alias("value"))
+        input_rows = source.count()
         cleaned = source.select(*selected)
+        city_key = F.regexp_replace(F.lower(F.trim("city")), r"\s+", " ")
+        city_map = F.create_map(*[
+            item
+            for alias, canonical in CITY_ALIASES.items()
+            for item in (F.lit(alias), F.lit(canonical))
+        ])
         cleaned = (
             cleaned
-            .withColumn("city", F.trim("city"))
-            .withColumn("area", F.when(F.col("area").isNull() | (F.trim("area") == ""), "Citywide").otherwise(F.trim("area")))
+            .withColumn("_city_key", city_key)
+            .withColumn("city", F.coalesce(city_map[F.col("_city_key")], F.initcap(F.col("_city_key"))))
+            .withColumn("area", F.when(F.col("area").isNull() | (F.trim("area") == ""), "Citywide").otherwise(F.regexp_replace(F.trim("area"), r"\s+", " ")))
             .withColumn("category", F.lower(F.trim("category")))
             .withColumn("metric", F.lower(F.trim("metric")))
             .withColumn("unit", F.when(F.col("unit").isNull() | (F.trim("unit") == ""), "count").otherwise(F.lower(F.trim("unit"))))
-            .withColumn("value", F.col("value").cast("double"))
-            .withColumn("latitude", F.col("latitude").cast("double"))
-            .withColumn("longitude", F.col("longitude").cast("double"))
-            .withColumn("observed_at", F.to_timestamp("observed_at"))
+            .withColumn("value", F.expr("try_cast(value AS DOUBLE)"))
+            .withColumn("latitude", F.expr("try_cast(latitude AS DOUBLE)"))
+            .withColumn("longitude", F.expr("try_cast(longitude AS DOUBLE)"))
+            .withColumn("observed_at", F.expr("try_to_timestamp(observed_at)"))
             .withColumn(
                 "coordinates_valid",
                 F.col("latitude").between(-90, 90) & F.col("longitude").between(-180, 180),
             )
             .withColumn("latitude", F.when(F.col("coordinates_valid"), F.col("latitude")))
             .withColumn("longitude", F.when(F.col("coordinates_valid"), F.col("longitude")))
-            .drop("coordinates_valid")
-            .filter(F.col("city").isNotNull() & (F.col("city") != "") & F.col("category").isNotNull() & (F.col("category") != "") & F.col("metric").isNotNull() & (F.col("metric") != "") & F.col("value").isNotNull())
-            .dropDuplicates()
+            .drop("coordinates_valid", "_city_key")
         )
 
+        valid = cleaned.filter(
+            F.col("city").isNotNull() & (F.col("city") != "")
+            & F.col("category").isNotNull() & (F.col("category") != "")
+            & F.col("metric").isNotNull() & (F.col("metric") != "")
+            & F.col("value").isNotNull() & ~F.isnan("value")
+            & (F.abs(F.col("value")) != F.lit(float("inf")))
+        )
+        valid_rows = valid.count()
+        cleaned = valid.dropDuplicates()
         row_count = cleaned.count()
         if row_count == 0:
             raise ValueError("No valid rows remain after city/value validation and exact de-duplication")
@@ -87,7 +111,11 @@ def main() -> None:
          .options(keyspace=args.keyspace, table=args.table)
          .mode("append")
          .save())
-        print(f"SpotWise Spark ETL completed at {datetime.now(timezone.utc).isoformat()}: {row_count:,} clean rows")
+        print(
+            f"SpotWise Spark ETL completed at {datetime.now(timezone.utc).isoformat()}: "
+            f"input={input_rows:,}, invalid={input_rows - valid_rows:,}, "
+            f"exact_duplicates={valid_rows - row_count:,}, output={row_count:,} rows"
+        )
         print(f"Curated Parquet: {args.output}; Cassandra: {args.keyspace}.{args.table}")
     finally:
         spark.stop()
