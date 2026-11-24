@@ -7,7 +7,7 @@ import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 from sqlalchemy.orm import Session
 
 from .db import ROOT
@@ -113,8 +113,12 @@ def summarize_signals(
     latitude: float | None = None,
     longitude: float | None = None,
     business_type: str | None = None,
+    owner_id: int | None = None,
 ) -> dict:
-    query = select(Observation).where(func.lower(Observation.city) == city.casefold())
+    query = select(Observation).join(SignalBatch, Observation.batch_id == SignalBatch.id).where(
+        func.lower(Observation.city) == city.casefold(),
+    )
+    query = query.where(SignalBatch.owner_id == owner_id) if owner_id is not None else query.where(false())
     has_geo_radius = radius_km is not None and latitude is not None and longitude is not None
     if area and not has_geo_radius:
         query = query.where(func.lower(Observation.area) == area.casefold())
@@ -179,7 +183,7 @@ def summarize_signals(
         }
 
     batch_ids = sorted({row.batch_id for row in rows})
-    batches = list(session.scalars(select(SignalBatch).where(SignalBatch.id.in_(batch_ids)))) if batch_ids else []
+    batches = list(session.scalars(select(SignalBatch).where(SignalBatch.id.in_(batch_ids), SignalBatch.owner_id == owner_id))) if batch_ids else []
     source_counts = Counter(row.category for row in rows)
     warnings = _scope_warnings(area, radius_km, latitude, longitude, unlocated)
     if competitor_warning:
@@ -250,7 +254,10 @@ def break_even(assumptions: dict) -> dict:
 def score_study(session: Session, study: Study, data: dict) -> dict:
     assumptions = json.loads(study.assumptions_json or "{}")
     weights = json.loads(study.weights_json or "{}")
-    signals = summarize_signals(session, study.city, study.area, study.radius_km, study.latitude, study.longitude, study.business_type)
+    signals = summarize_signals(
+        session, study.city, study.area, study.radius_km, study.latitude, study.longitude,
+        study.business_type, owner_id=study.owner_id,
+    )
     scores: dict[str, dict] = {}
 
     rent = assumptions.get("monthly_rent")

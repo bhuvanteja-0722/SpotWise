@@ -5,18 +5,19 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import delete, event, func, select
+from sqlalchemy import delete, event, func, inspect, select, update
 from sqlalchemy.orm import Session
 
 from .analytics import break_even, load_analysis, market_context, score_study, serialize_study, summarize_signals
+from .auth import COOKIE_NAME, clear_session_cookie, get_account_from_request, hash_password, new_session, normalize_email, require_account, set_session_cookie, verify_password
 from .dataset_import import normalize_rows, read_rows
 from .db import Base, ROOT, engine, get_session
-from .models import Observation, SignalBatch, Study, utc_now
+from .models import Account, AccountSession, Observation, SignalBatch, Study, utc_now
 from .place_category_model import classify_place_names
 from .salary_model import estimate_salary
-from .schemas import DatasetImportResult, DatasetPreview, PlaceCategoryRequest, SalaryEstimateRequest, StudyComparison, StudyCreate, StudyUpdate
+from .schemas import AccountCredentials, DatasetImportResult, DatasetPreview, PlaceCategoryRequest, SalaryEstimateRequest, StudyComparison, StudyCreate, StudyUpdate
 from .transit_sources import sources_for_city
 
 MAX_UPLOAD_BYTES = int(os.getenv("SPOTWISE_MAX_UPLOAD_MB", "50")) * 1024 * 1024
@@ -47,6 +48,7 @@ def _enable_sqlite_foreign_keys(connection, _record):
 async def lifespan(_app: FastAPI):
     (ROOT / "data").mkdir(exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    _migrate_account_ownership()
     yield
 
 
@@ -56,6 +58,83 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+def _migrate_account_ownership() -> None:
+    """Add nullable ownership columns to databases created before accounts existed."""
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        for table in ("studies", "signal_batches"):
+            if table not in inspector.get_table_names():
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table)}
+            if "owner_id" not in columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN owner_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE"
+                )
+
+
+def optional_account(request: Request, session: Session = Depends(get_session)) -> Account | None:
+    return get_account_from_request(request, session)
+
+
+def signed_in_account(account: Account | None = Depends(optional_account)) -> Account:
+    return require_account(account)
+
+
+def _public_account(account: Account) -> dict:
+    return {"id": account.id, "email": account.email, "created_at": account.created_at.isoformat() + "Z"}
+
+
+@app.get("/api/v1/auth/me", tags=["accounts"])
+def account_me(account: Account | None = Depends(optional_account)):
+    return {"authenticated": account is not None, "account": _public_account(account) if account else None}
+
+
+@app.post("/api/v1/auth/signup", status_code=status.HTTP_201_CREATED, tags=["accounts"])
+def account_signup(body: AccountCredentials, request: Request, response: Response, session: Session = Depends(get_session)):
+    email = normalize_email(body.email)
+    if session.scalar(select(Account.id).where(Account.email == email)) is not None:
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Sign in instead.")
+    account = Account(email=email, password_hash=hash_password(body.password))
+    session.add(account)
+    session.flush()
+    if (session.scalar(select(func.count(Account.id))) or 0) == 1:
+        # Preserve a pre-account single-user installation by giving its local
+        # studies and imported batches to the first account created.
+        session.execute(update(Study).where(Study.owner_id.is_(None)).values(owner_id=account.id))
+        session.execute(update(SignalBatch).where(SignalBatch.owner_id.is_(None)).values(owner_id=account.id))
+    token = new_session(session, account)
+    session.commit()
+    session.refresh(account)
+    set_session_cookie(response, token, request)
+    return {"authenticated": True, "account": _public_account(account)}
+
+
+@app.post("/api/v1/auth/login", tags=["accounts"])
+def account_login(body: AccountCredentials, request: Request, response: Response, session: Session = Depends(get_session)):
+    email = normalize_email(body.email)
+    account = session.scalar(select(Account).where(Account.email == email))
+    if account is None or not verify_password(body.password, account.password_hash):
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+    token = new_session(session, account)
+    session.commit()
+    set_session_cookie(response, token, request)
+    return {"authenticated": True, "account": _public_account(account)}
+
+
+@app.post("/api/v1/auth/logout", tags=["accounts"])
+def account_logout(request: Request, response: Response, session: Session = Depends(get_session)):
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        import hashlib
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        record = session.scalar(select(AccountSession).where(AccountSession.token_hash == token_hash))
+        if record:
+            session.delete(record)
+            session.commit()
+    clear_session_cookie(response, request)
+    return {"authenticated": False}
 
 
 def get_data() -> dict:
@@ -102,7 +181,7 @@ def health(session: Session = Depends(get_session)):
 
 
 @app.get("/api/v1/markets", tags=["analysis"])
-def markets(session: Session = Depends(get_session), data: dict = Depends(get_data)):
+def markets(session: Session = Depends(get_session), data: dict = Depends(get_data), account: Account | None = Depends(optional_account)):
     default_businesses = [
         "Cafe / restaurant", "Retail shop", "Bakery / dessert shop", "Grocery / convenience store",
         "Clothing / fashion retail", "Pharmacy", "Salon / wellness", "Fitness studio",
@@ -110,12 +189,17 @@ def markets(session: Session = Depends(get_session), data: dict = Depends(get_da
         "Home goods / furniture", "Pet care / veterinary", "Coworking space",
         "Hotel / guesthouse", "Repair / local service", "Other local service",
     ]
-    uploaded_markets = set(session.scalars(select(Observation.city).distinct()))
+    owner_id = account.id if account else None
+    uploaded_markets = set(session.scalars(
+        select(Observation.city).join(SignalBatch).where(SignalBatch.owner_id == owner_id).distinct()
+    )) if owner_id is not None else set()
     imported_businesses = sorted({
         value.strip() for value in session.scalars(
-            select(Observation.detail).where(Observation.category == "competition", Observation.detail.is_not(None))
+            select(Observation.detail).join(SignalBatch).where(
+                Observation.category == "competition", Observation.detail.is_not(None), SignalBatch.owner_id == owner_id
+            )
         ) if value and value.strip()
-    }, key=str.casefold)
+    }, key=str.casefold) if owner_id is not None else []
     jobs = data.get("jobs", {}).get("cities", [])
     rail = data.get("rail", {}).get("cities", [])
     market_names = {item["name"] for item in jobs} | uploaded_markets
@@ -129,8 +213,10 @@ def markets(session: Session = Depends(get_session), data: dict = Depends(get_da
         if city.casefold() == "mumbai":
             signals.append("Mumbai-only residential rent")
         local_categories = sorted(set(session.scalars(
-            select(Observation.category).where(func.lower(Observation.city) == city.casefold())
-        )))
+            select(Observation.category).join(SignalBatch).where(
+                func.lower(Observation.city) == city.casefold(), SignalBatch.owner_id == owner_id
+            )
+        ))) if owner_id is not None else []
         if local_categories:
             signals.append(f"{len(local_categories)} imported local signal(s)")
         coverage.append({"city": city, "signals": signals or ["user-uploaded data only"]})
@@ -143,9 +229,17 @@ def markets(session: Session = Depends(get_session), data: dict = Depends(get_da
 
 
 @app.get("/api/v1/areas", tags=["analysis"])
-def areas(city: str = Query(min_length=2, max_length=90), session: Session = Depends(get_session), data: dict = Depends(get_data)):
-    values = set(session.scalars(select(Observation.area).where(func.lower(Observation.city) == city.casefold(), Observation.area != "Citywide")))
-    values.update(session.scalars(select(Study.area).where(func.lower(Study.city) == city.casefold(), Study.area.is_not(None))))
+def areas(city: str = Query(min_length=2, max_length=90), session: Session = Depends(get_session), data: dict = Depends(get_data), account: Account | None = Depends(optional_account)):
+    owner_id = account.id if account else None
+    values = set(session.scalars(
+        select(Observation.area).join(SignalBatch).where(
+            func.lower(Observation.city) == city.casefold(), Observation.area != "Citywide", SignalBatch.owner_id == owner_id
+        )
+    )) if owner_id is not None else set()
+    if owner_id is not None:
+        values.update(session.scalars(select(Study.area).where(
+            func.lower(Study.city) == city.casefold(), Study.area.is_not(None), Study.owner_id == owner_id
+        )))
     if city.casefold() == "mumbai":
         values.update(item["name"] for item in data.get("rentals", {}).get("localities", []))
     city_labels = CITY_LEVEL_AREA_ALIASES.get(city.strip().casefold(), {city.strip().casefold()})
@@ -176,16 +270,18 @@ def dashboard(
     business_type: str | None = Query(default=None, max_length=80),
     session: Session = Depends(get_session),
     data: dict = Depends(get_data),
+    account: Account | None = Depends(optional_account),
 ):
+    owner_id = account.id if account else None
     return {
         "analysis": data,
         "selected_city": city,
         "selected_area": area,
         "market_context": market_context(data, city),
-        "uploaded_signals": summarize_signals(session, city, area, business_type=business_type),
+        "uploaded_signals": summarize_signals(session, city, area, business_type=business_type, owner_id=owner_id),
         "transit_sources": sources_for_city(city),
-        "study_count": session.scalar(select(func.count(Study.id))) or 0,
-        "dataset_count": session.scalar(select(func.count(SignalBatch.id))) or 0,
+        "study_count": session.scalar(select(func.count(Study.id)).where(Study.owner_id == owner_id)) if owner_id is not None else 0,
+        "dataset_count": session.scalar(select(func.count(SignalBatch.id)).where(SignalBatch.owner_id == owner_id)) if owner_id is not None else 0,
     }
 
 
@@ -198,15 +294,18 @@ def signals(
     latitude: float | None = Query(default=None, ge=-90, le=90),
     longitude: float | None = Query(default=None, ge=-180, le=180),
     session: Session = Depends(get_session),
+    account: Account | None = Depends(optional_account),
 ):
     if (latitude is None) != (longitude is None):
         raise HTTPException(status_code=422, detail="Latitude and longitude must be provided together")
-    return summarize_signals(session, city, area, radius_km, latitude, longitude, business_type)
+    return summarize_signals(session, city, area, radius_km, latitude, longitude, business_type, owner_id=account.id if account else None)
 
 
 @app.get("/api/v1/data-sources", tags=["datasets"])
-def data_sources(session: Session = Depends(get_session), data: dict = Depends(get_data)):
-    uploaded = list(session.scalars(select(SignalBatch).order_by(SignalBatch.imported_at.desc())))
+def data_sources(session: Session = Depends(get_session), data: dict = Depends(get_data), account: Account | None = Depends(optional_account)):
+    uploaded = list(session.scalars(
+        select(SignalBatch).where(SignalBatch.owner_id == account.id).order_by(SignalBatch.imported_at.desc())
+    )) if account else []
     return {"kaggle_sources": data.get("sources", []), "uploaded_sources": [as_public_batch(item) for item in uploaded]}
 
 
@@ -281,6 +380,7 @@ async def preview_dataset(
     skip_duplicates: bool = Form(default=True),
     normalize_labels: bool = Form(default=True),
     file: UploadFile = File(...),
+    _account: Account = Depends(signed_in_account),
 ):
     category = _validate_import_category(category)
     filename, content = await _read_upload_file(file)
@@ -301,6 +401,7 @@ async def import_dataset(
     normalize_labels: bool = Form(default=True),
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
+    account: Account = Depends(signed_in_account),
 ):
     category = _validate_import_category(category)
     filename, content = await _read_upload_file(file)
@@ -311,7 +412,7 @@ async def import_dataset(
     if not observations:
         raise HTTPException(status_code=422, detail={"message": "No usable rows found.", "errors": errors[:10]})
 
-    batch = SignalBatch(name=name.strip(), category=category, filename=filename, source=source.strip() or "User supplied dataset", row_count=len(observations))
+    batch = SignalBatch(name=name.strip(), category=category, filename=filename, source=source.strip() or "User supplied dataset", row_count=len(observations), owner_id=account.id)
     session.add(batch)
     session.flush()
     for observation in observations:
@@ -337,8 +438,8 @@ def transport_sources(city: str = Query(min_length=2, max_length=90)):
     return {"city": city, "feeds": sources_for_city(city)}
 
 @app.delete("/api/v1/data-sources/{batch_id}", tags=["datasets"])
-def delete_dataset(batch_id: int, session: Session = Depends(get_session)):
-    batch = session.get(SignalBatch, batch_id)
+def delete_dataset(batch_id: int, session: Session = Depends(get_session), account: Account = Depends(signed_in_account)):
+    batch = session.scalar(select(SignalBatch).where(SignalBatch.id == batch_id, SignalBatch.owner_id == account.id))
     if batch is None:
         raise HTTPException(status_code=404, detail="Dataset import not found")
     name = batch.name
@@ -348,17 +449,20 @@ def delete_dataset(batch_id: int, session: Session = Depends(get_session)):
 
 
 @app.get("/api/v1/studies", tags=["studies"])
-def list_studies(session: Session = Depends(get_session)):
-    studies = list(session.scalars(select(Study).order_by(Study.updated_at.desc())))
+def list_studies(session: Session = Depends(get_session), account: Account | None = Depends(optional_account)):
+    if account is None:
+        return {"studies": []}
+    studies = list(session.scalars(select(Study).where(Study.owner_id == account.id).order_by(Study.updated_at.desc())))
     return {"studies": [serialize_study(session, study) for study in studies]}
 
 
 @app.post("/api/v1/studies", status_code=status.HTTP_201_CREATED, tags=["studies"])
-def create_study(body: StudyCreate, session: Session = Depends(get_session), data: dict = Depends(get_data)):
+def create_study(body: StudyCreate, session: Session = Depends(get_session), data: dict = Depends(get_data), account: Account = Depends(signed_in_account)):
     study = Study(
         name=body.name.strip(), city=body.city.strip(), area=body.area.strip() if body.area else None,
         business_type=body.business_type.strip(), radius_km=body.radius_km, latitude=body.latitude,
         longitude=body.longitude, assumptions_json=json.dumps(body.assumptions), weights_json=json.dumps(body.weights),
+        owner_id=account.id,
     )
     session.add(study)
     session.flush()
@@ -369,16 +473,16 @@ def create_study(body: StudyCreate, session: Session = Depends(get_session), dat
 
 
 @app.get("/api/v1/studies/{study_id}", tags=["studies"])
-def get_study(study_id: int, session: Session = Depends(get_session)):
-    study = session.get(Study, study_id)
+def get_study(study_id: int, session: Session = Depends(get_session), account: Account = Depends(signed_in_account)):
+    study = session.scalar(select(Study).where(Study.id == study_id, Study.owner_id == account.id))
     if study is None:
         raise HTTPException(status_code=404, detail="Study not found")
     return serialize_study(session, study)
 
 
 @app.put("/api/v1/studies/{study_id}", tags=["studies"])
-def update_study(study_id: int, body: StudyUpdate, session: Session = Depends(get_session), data: dict = Depends(get_data)):
-    study = session.get(Study, study_id)
+def update_study(study_id: int, body: StudyUpdate, session: Session = Depends(get_session), data: dict = Depends(get_data), account: Account = Depends(signed_in_account)):
+    study = session.scalar(select(Study).where(Study.id == study_id, Study.owner_id == account.id))
     if study is None:
         raise HTTPException(status_code=404, detail="Study not found")
     updates = body.model_dump(exclude_unset=True)
@@ -396,8 +500,8 @@ def update_study(study_id: int, body: StudyUpdate, session: Session = Depends(ge
 
 
 @app.delete("/api/v1/studies/{study_id}", tags=["studies"])
-def delete_study(study_id: int, session: Session = Depends(get_session)):
-    study = session.get(Study, study_id)
+def delete_study(study_id: int, session: Session = Depends(get_session), account: Account = Depends(signed_in_account)):
+    study = session.scalar(select(Study).where(Study.id == study_id, Study.owner_id == account.id))
     if study is None:
         raise HTTPException(status_code=404, detail="Study not found")
     name = study.name
@@ -407,10 +511,10 @@ def delete_study(study_id: int, session: Session = Depends(get_session)):
 
 
 @app.post("/api/v1/studies/compare", tags=["studies"])
-def compare_studies(body: StudyComparison, session: Session = Depends(get_session)):
+def compare_studies(body: StudyComparison, session: Session = Depends(get_session), account: Account = Depends(signed_in_account)):
     if len(set(body.study_ids)) != len(body.study_ids):
         raise HTTPException(status_code=422, detail="Study IDs must be unique")
-    studies = list(session.scalars(select(Study).where(Study.id.in_(body.study_ids))))
+    studies = list(session.scalars(select(Study).where(Study.id.in_(body.study_ids), Study.owner_id == account.id)))
     by_id = {study.id: study for study in studies}
     missing = [study_id for study_id in body.study_ids if study_id not in by_id]
     if missing:
@@ -425,7 +529,7 @@ def compare_studies(body: StudyComparison, session: Session = Depends(get_sessio
 
 
 @app.get("/api/v1/coverage", tags=["analysis"])
-def coverage(city: str = Query(default="Mumbai", min_length=1, max_length=90), session: Session = Depends(get_session), data: dict = Depends(get_data)):
+def coverage(city: str = Query(default="Mumbai", min_length=1, max_length=90), session: Session = Depends(get_session), data: dict = Depends(get_data), account: Account | None = Depends(optional_account)):
     # A category uploaded for a different city must never make this city's card appear covered.
     source_options = {
         "Commercial rent": ("Commercial property research and commercial lease benchmarks", "https://www.iimb.ac.in/reri/", "Office lease indices can provide broad context; they are not current neighborhood retail asking rents."),
@@ -449,6 +553,7 @@ def coverage(city: str = Query(default="Mumbai", min_length=1, max_length=90), s
         {"name": "Local wage signals", "status": "Missing", "need": "Recent local wages matched to the role and monthly/annual units"},
         {"name": "Cost of living", "status": "Missing", "need": "Current local prices; CPI is broad context rather than a neighborhood measure"},
     ]
+    owner_id = account.id if account else None
     items = []
     imported_categories = set()
     for entry in entries:
@@ -457,21 +562,24 @@ def coverage(city: str = Query(default="Mumbai", min_length=1, max_length=90), s
         records = 0
         area_records = 0
         if category:
-            records = session.scalar(select(func.count(Observation.id)).where(
-                Observation.category == category, func.lower(Observation.city) == city.strip().lower()
-            )) or 0
-            area_records = session.scalar(select(func.count(Observation.id)).where(
+            base_query = select(func.count(Observation.id)).join(SignalBatch).where(
+                Observation.category == category, func.lower(Observation.city) == city.strip().lower(),
+                SignalBatch.owner_id == owner_id,
+            ) if owner_id is not None else None
+            records = session.scalar(base_query) or 0 if base_query is not None else 0
+            area_records = session.scalar(base_query.where(
                 Observation.category == category, func.lower(Observation.city) == city.strip().lower(),
                 Observation.area != "Citywide"
-            )) or 0
+            )) or 0 if base_query is not None else 0
         source_name, source_url, source_note = source_options[name]
         if name == "Local transit access":
             city_feeds = sources_for_city(city)
             imported_batches = list(session.scalars(
                 select(SignalBatch).join(Observation).where(
-                    Observation.category == "transit", func.lower(Observation.city) == city.strip().lower()
+                    Observation.category == "transit", func.lower(Observation.city) == city.strip().lower(),
+                    SignalBatch.owner_id == owner_id,
                 ).distinct().order_by(SignalBatch.imported_at.desc())
-            ))
+            )) if owner_id is not None else []
             selected_feed = None
             if imported_batches:
                 for batch in imported_batches:

@@ -1,6 +1,6 @@
 # SpotWise
 
-SpotWise is a full-stack big data analysis project for researching where to open a local business. A responsive dark-mode website calls a FastAPI backend, reads prepared Kaggle analysis, stores website studies and imported local signals in SQLite, and calculates transparent break-even and location-readiness scenarios. An optional distributed batch pipeline uses Apache Spark to clean and aggregate large signal files, HDFS to retain curated Parquet data, and Apache Cassandra to serve area-level summary records.
+SpotWise is a full-stack big data analysis project for researching where to open a local business. A responsive dark-mode website calls a FastAPI backend, reads prepared Kaggle analysis, stores website studies and account-owned imports in SQLite, and calculates transparent break-even and location-readiness scenarios. An optional batch pipeline uses Apache Spark for distributed cleanup and aggregation, HDFS for raw and curated Parquet zones, MongoDB as a flexible raw-document landing/readback layer, and Apache Cassandra to serve area-level summaries.
 
 ## What it does
 
@@ -9,6 +9,7 @@ SpotWise is a full-stack big data analysis project for researching where to open
 - Imports CSV, Excel (.xlsx), JSON, JSON Lines, Parquet, and static GTFS ZIP data for footfall, competitors, traffic, parking, transit, workforce, wages, cost of living, and commercial rent.
 - Summarizes uploaded records, including average, median, totals, hourly peak, and nearest geocoded transit point.
 - Saves, edits, lists, compares, and deletes location studies in a persistent SQLite database.
+- Provides account sign-up/sign-in, private saved studies and imports, and a guided explanation of the workflow and Big Data stack.
 - Scores factors only when both an uploaded signal and a matching user target exist. A composite readiness score requires at least three scored factors.
 - Calculates a user-entered monthly break-even scenario and exports a JSON research snapshot.
 - Serves interactive API documentation at `/docs`.
@@ -17,20 +18,22 @@ SpotWise is a full-stack big data analysis project for researching where to open
 
 SpotWise uses a dark, low-glare workspace with a lime accent, muted green surfaces, and Plus Jakarta Sans / Space Grotesk typography. A perspective-based orbital hero, layered cards, gentle hover depth, and restrained glow add 3D character while keeping the analysis controls legible. The layout groups the work into a clear path: select a market and business, review local context, check workforce and transport signals, model break-even, then save or compare studies. Cards, data-source badges, freshness notes, and empty states help distinguish observed data from user assumptions. The interface adapts to desktop and mobile widths, supports an optional light theme, and includes visible keyboard focus and reduced-motion support.
 
-The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. The regular website backend uses FastAPI, SQLAlchemy, SQLite, scikit-learn/joblib, PyArrow, and DuckDB for bounded cloud queries on Overture GeoParquet. The optional batch stack is Spark 3.5.7 (PySpark) + HDFS 3.5.0 + Cassandra 5.0.9 with the Apache Spark Cassandra Connector 3.5.1. It is separate from the lightweight default website, and does not require its large containers for normal use. `requirements.txt` is for the regular web app; the Spark runtime and connector are provided by the optional Docker services.
+The frontend is plain HTML, CSS, and JavaScript served by FastAPI; it has no Node build step. The regular website backend uses FastAPI, SQLAlchemy, SQLite, scikit-learn/joblib, PyArrow, and DuckDB for bounded cloud queries on Overture GeoParquet. The optional batch stack is Spark 3.5.7 (PySpark) + HDFS 3.5.0 + MongoDB 8.0 + Cassandra 5.0.9, with Apache Spark Cassandra Connector 3.5.1 and MongoDB Spark Connector 10.7.0. It is separate from the lightweight default website, and does not require its large containers for normal use. `requirements.txt` is for the regular web app; the Spark runtime and connector are provided by the optional Docker services.
 
-## Big data pipeline: Spark, HDFS, and Cassandra
+## Big data pipeline: Spark, HDFS, MongoDB, and Cassandra
 
-The optional stack performs a real distributed batch job; these tools are not merely listed as technologies. Standardized local signal files are copied into HDFS, Spark validates and cleans the rows, removes exact duplicates, writes city/category-partitioned Parquet back to HDFS, then aggregates by city, area, signal category, metric, and unit into Cassandra. Spark uses the Apache Cassandra connector, pinned to a release compatible with Spark 3.5, Scala 2.12, and Cassandra 5.0. [Spark standalone clusters](https://spark.apache.org/docs/3.5.7/spark-standalone.html) distribute tasks across workers; the [connector](https://github.com/apache/cassandra-spark-connector) writes Spark DataFrames to Cassandra. Read about [HDFS](https://hadoop.apache.org/docs/current3/hadoop-project-dist/hadoop-hdfs/HdfsUserGuide.html) and [Cassandra](https://cassandra.apache.org/doc/stable/cassandra/getting-started/) from their official documentation.
+The optional stack has a connected batch flow; these tools are not merely listed as technologies. Standardized signal files are copied into HDFS as the durable raw-file zone. Spark reads each file and writes source rows into a run-specific MongoDB collection as flexible raw documents, then reads those documents back through the [MongoDB Spark Connector](https://www.mongodb.com/docs/spark-connector/v10.x/getting-started/). Spark validates and cleans rows, removes exact duplicates, writes city/category-partitioned Parquet back to HDFS, and aggregates by city, area, signal category, metric, and unit into Cassandra. The connector supports Spark 3.5 with a Scala 2.12 artifact and MongoDB 4.2 or later. Spark workers distribute tasks in [standalone mode](https://spark.apache.org/docs/3.5.7/spark-standalone.html); the [Cassandra connector](https://github.com/apache/cassandra-spark-connector) writes summary DataFrames. Read about [HDFS](https://hadoop.apache.org/docs/current3/hadoop-project-dist/hadoop-hdfs/HdfsUserGuide.html), [MongoDB](https://www.mongodb.com/docs/), and [Cassandra](https://cassandra.apache.org/doc/stable/cassandra/getting-started/) in their official documentation.
 
 ```mermaid
 flowchart LR
-  A[Standardized CSV or Parquet] --> B[HDFS raw zone]
-  B --> C[Spark cleanup and aggregation]
-  C --> D[HDFS curated Parquet]
-  C --> E[Cassandra area summaries]
-  F[FastAPI website] --> G[SQLite request-time store]
-  F -->|Big data summaries endpoint| E
+  A[Standardized CSV or Parquet] --> B[HDFS raw file zone]
+  B --> C[Spark distributed read]
+  C --> D[MongoDB raw documents]
+  D --> E[Spark validation and aggregation]
+  E --> F[HDFS curated Parquet]
+  E --> G[Cassandra area summaries]
+  H[FastAPI website] --> I[SQLite accounts, studies, imports]
+  H -->|Big data summaries endpoint| G
 ```
 
 The large services are opt-in because they use substantially more memory and disk than this class-project website. Install Docker Desktop/Engine with Compose v2, then supply a CSV or Parquet file with at least `city,value`; optional columns are `area,category,metric,unit,name,detail,observed_at,latitude,longitude`. If the file lacks a category or metric column, set them as arguments. Example:
@@ -40,14 +43,15 @@ docker compose up -d spotwise
 ./scripts/run_bigdata_pipeline.sh data/raw/my_footfall.csv footfall pedestrians_per_hour
 ```
 
-The script starts the optional services, stages the input to HDFS, creates the Cassandra table, submits the Spark job, and prints the HDFS output location. The website's optional `GET /api/v1/bigdata/summaries?city=Bengaluru&category=footfall` endpoint reads those area summaries from Cassandra. Docker Compose configures the website container to connect to the `cassandra` service. If running FastAPI directly on your computer, start the profile services and launch it with `SPOTWISE_CASSANDRA_CONTACT_POINTS=127.0.0.1 python3 run.py`. Use `docker compose --profile bigdata up -d` to start the stack manually; Spark UI is at [http://localhost:8088](http://localhost:8088), HDFS NameNode UI at [http://localhost:9870](http://localhost:9870), and Spark worker UI at [http://localhost:8081](http://localhost:8081). Query summaries with `docker compose --profile bigdata exec cassandra cqlsh -e 'SELECT * FROM spotwise.area_signal_summary;'`. Stop optional services with `docker compose --profile bigdata down`; add `-v` only if you intentionally want to delete the HDFS and Cassandra stored volumes.
+The script starts optional services, stages the file to HDFS, initializes Cassandra, and submits Spark with both connectors. MongoDB retains a run-specific raw document collection; HDFS keeps raw and curated Parquet; Cassandra stores aggregates. The website's optional `GET /api/v1/bigdata/summaries?city=Bengaluru&category=footfall` endpoint reads those area summaries from Cassandra. Docker Compose configures the website container to connect to the `cassandra` service. If running FastAPI directly on your computer, start the profile services and launch it with `SPOTWISE_CASSANDRA_CONTACT_POINTS=127.0.0.1 python3 run.py`. Use `docker compose --profile bigdata up -d` to start manually; Spark UI is at [http://localhost:8088](http://localhost:8088), HDFS NameNode UI at [http://localhost:9870](http://localhost:9870), Spark worker UI at [http://localhost:8081](http://localhost:8081), MongoDB is reachable from the other Big Data services on the private Compose network only (port 27017 is not published to the host). Query Cassandra with `docker compose --profile bigdata exec cassandra cqlsh -e 'SELECT * FROM spotwise.area_signal_summary;'`; inspect Mongo collections with `docker compose --profile bigdata exec mongodb mongosh spotwise --eval 'show collections'`. Stop optional services with `docker compose --profile bigdata down`; add `-v` only if you intentionally want to delete the HDFS, MongoDB, and Cassandra volumes.
 
 ### Where each big-data tool is used
 
 | Tool | SpotWise workflow | What it does not do |
 | --- | --- | --- |
 | HDFS | The pipeline stages each input under `/spotwise/raw/<run-id>` and writes cleaned, city/category-partitioned Parquet under `/spotwise/curated/<run-id>`. | HDFS is not the default website database and does not host the bundled Kaggle aggregates. |
-| Apache Spark | `bigdata/spark_etl.py` reads the staged CSV/Parquet in parallel, standardizes city/area labels, rejects unusable numeric rows, removes exact duplicates, writes curated Parquet, and computes area summaries. | Spark is not involved in each normal dashboard request; it runs only when the optional batch command is executed. |
+| Apache Spark | `bigdata/spark_etl.py` reads staged files, moves raw rows through MongoDB, standardizes city/area labels, rejects invalid rows, writes curated Parquet, and computes area summaries. | Spark runs only when the optional batch command is executed, not during each dashboard request. |
+| MongoDB | Each batch run stores source records in a separate `spotwise.raw_<run-id>` collection, then Spark reads that collection before cleanup. | This is batch staging, not the website user-import database. The local Compose service has no authentication and is not published to host ports; keep the Docker network on a trusted development machine. |
 | Apache Cassandra | Spark writes summary rows to `spotwise.area_signal_summary`; `GET /api/v1/bigdata/summaries` reads them when Cassandra is configured. | Cassandra does not currently replace SQLite for saved studies or interactive imports. |
 | SQLite | The normal FastAPI workflow stores imported observations, source batches, and saved studies here. | SQLite is suitable for this class-project setup, not a distributed high-write store. |
 
@@ -69,9 +73,9 @@ Bengaluru,Indiranagar,footfall,visitors_per_hour,not-a-number,people/hour
 
 After city normalization, the exact duplicate, and invalid-value filtering, Spark would report `input=6`, `invalid=1`, `exact_duplicates=1`, `output=4`. Cassandra would receive two groups: `Bengaluru / Indiranagar` with 3 records, average 180, median 180, total 540, min 120, max 240; and `Bengaluru / Citywide` with 1 record and value 90. The three distinct Indiranagar values make the example median unambiguous. The city aliases ensure the area summaries use the same city key that the dashboard and API expect.
 
-The regular website workflow is exercised using disposable test data. As of this README update, `python3 -m unittest discover -s tests -v` passes **4 tests**. Coverage includes: previewing a CSV with one valid row, one duplicate, and one invalid value (expected preview counts: `clean_rows=1`, `duplicates_removed=1`, `skipped_invalid_rows=1`); importing CSV, XLSX, JSON, JSONL, Parquet, and static GTFS; filtering competitors by selected business type; rejecting malformed uploads and incomplete coordinates; salary and category model endpoints; and creating, updating, comparing, and deleting saved studies. These are backend/API regression results, not load tests or a Spark cluster integration run.
+The regular website workflow is exercised using disposable test data. As of this README update, `python3 -m unittest discover -s tests -v` passes **6 tests**, including account signup/login, ownership isolation, and anonymous write protection. Coverage includes: previewing a CSV with one valid row, one duplicate, and one invalid value (expected preview counts: `clean_rows=1`, `duplicates_removed=1`, `skipped_invalid_rows=1`); importing CSV, XLSX, JSON, JSONL, Parquet, and static GTFS; filtering competitors by selected business type; rejecting malformed uploads and incomplete coordinates; salary and category model endpoints; and creating, updating, comparing, and deleting saved studies. These are backend/API regression results, not load tests or a Spark cluster integration run.
 
-**Environment limitation:** the current workspace does not have Docker or PySpark installed, so the Spark/HDFS/Cassandra containers and connector cannot be executed or certified here. Their Compose wiring, Spark script, Cassandra schema, and API integration are present in the repository, but the example above is a hand-calculated expected result. To verify the distributed path on a machine with Docker, run the command in the next example section against that CSV and then query Cassandra and the API endpoint.
+**Environment limitation:** the current workspace does not have Docker installed, so the Spark/HDFS/MongoDB/Cassandra containers and connectors cannot be executed or certified here. Their Compose wiring, Spark script, Cassandra schema, and API integration are present in the repository, but the example above is a hand-calculated expected result. To verify the distributed path on a machine with Docker, run the command in the next example section against that CSV and then query Cassandra and the API endpoint.
 
 To run the exact six-row example, save the CSV above as `/tmp/spotwise-demo.csv`, then run:
 
@@ -82,7 +86,7 @@ docker compose --profile bigdata exec cassandra cqlsh -e \
 curl 'http://127.0.0.1:8000/api/v1/bigdata/summaries?city=Bengaluru&category=footfall'
 ```
 
-This is a single-node teaching setup with one HDFS DataNode and one Spark worker, not a fault-tolerant production cluster. HDFS replication is 1. The live dashboard's current interactive imports and location scores still use SQLite; Spark's summaries can be inspected in the UI/API endpoint described above and in Cassandra. This keeps the core app usable without a running distributed cluster while making the distributed batch workflow part of the project. No user API key is needed.
+This is a single-node teaching setup with one HDFS DataNode and one Spark worker, not a fault-tolerant production cluster. HDFS replication is 1. Interactive account imports and studies still use SQLite; the optional Spark/MongoDB/HDFS/Cassandra pipeline is a separate shared batch demonstration. Do not pass private account uploads into the shared pipeline without adding tenant-aware controls. No user API key is needed.
 
 ### What the Spark job cleans and outputs
 
@@ -346,4 +350,22 @@ For a credible location score, prioritize recent, geocoded, local commercial lis
 
 APIs would improve specific missing signals, but require source-specific integration and usage limits. Google Places is a practical paid option for nearby competitors/POIs and coordinates; Google Maps Platform publishes India-specific pricing and free monthly thresholds, and nearby search can become billable. For transit, use official city GTFS feeds first. OpenStreetMap can add open POI/road context, but do not depend on the community Overpass endpoint for large repeated production queries; use a licensed regional extract or host the data yourself. Footfall is the hardest gap: it generally needs licensed mobility data or a local authority/field-count dataset, not a normal maps API. Keep API keys server-side in environment variables and cache permitted results. See [Google India pricing](https://developers.google.com/maps/billing-and-pricing/india), [Delhi GTFS docs](https://otd.delhi.gov.in/documentation/), and the [OpenStreetMap service policies](https://operations.osmfoundation.org/policies/).
 
-This repository is set up for local development and a single-user academic project. It does not include user authentication, account isolation, deployment secrets, managed backups, or production migrations. Do not expose the local server to a public network with private datasets. Before a public multi-user deployment, add authentication, authorization, a production database, backup/retention policy, and review each source’s redistribution rights.
+This repository is set up for local development and an academic project. Local account sign-up and sign-in isolate saved studies and user-imported datasets in the SQLite database. Sessions use HttpOnly, SameSite cookies and salted PBKDF2 password hashes. Accounts are local to this SpotWise database; there is no email verification, password recovery, or account administration. Do not expose the development server publicly without adding production-grade account recovery, rate limits, deployment secrets, backups, managed database migrations, and a source-license review.
+
+## Accounts and how to use SpotWise
+
+1. Start SpotWise locally as described in [Run locally](#run-locally), then open `http://127.0.0.1:8000`. The first-use guide is also available from **How to use** in the top bar.
+2. Select a city, business type, and optional neighborhood. A typed neighborhood is a label/filter; it does not mean the project has local evidence for that neighborhood.
+3. Review the market, workforce, and mobility sections. Read the source name, data year, geography, and notes before using a number. Base datasets remain project-wide; imported files and saved studies are account-specific.
+4. For missing local evidence, create an account or sign in. Under **Data & methods**, choose a signal category and upload CSV, XLSX, JSON, JSONL/NDJSON, Parquet, or static GTFS ZIP. Scan the file, inspect the sample and row-cleaning report, then import it. The original uploaded file is not retained; accepted rows are normalized into SQLite.
+5. Enter your own business assumptions in the scenario planner. Its break-even and monthly surplus are arithmetic estimates based on those assumptions, not guaranteed outcomes.
+6. Save location studies to your account and compare two to four alternatives. Signing out hides account-specific records from the browser; signing back into the same local database restores access.
+
+### Reading the outputs correctly
+
+- **Missing / blank / zero** usually means there are no matching local records; it does not mean there are zero people, businesses, traffic, or expenses.
+- A **source link** identifies a possible dataset or provider. It does not mean SpotWise downloaded or verified that source. “Local data” is shown only for imported records matching the selected market.
+- **Readiness** is a transparent heuristic based on available observations and any targets you provide. It is not trained on verified business openings, closures, sales, or profit outcomes, and it cannot predict success.
+- Mumbai rental listings describe residential asking prices, not current commercial leases. The historic rail snapshot is not a current timetable. Confirm current commercial quotes, traffic, transport, and footfall locally.
+- A city-only row is not neighborhood-level evidence. A neighborhood score needs suitable local records, and geocoding or a typed area name cannot create observations that the source did not collect.
+- The Spark/HDFS/MongoDB/Cassandra pipeline is an optional shared batch-processing demonstration. Per-account local upload and study data stay in SQLite; do not process private uploads through the shared Big Data pipeline without first adding account-aware namespaces and access controls.

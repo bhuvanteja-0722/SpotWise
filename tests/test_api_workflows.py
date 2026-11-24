@@ -22,7 +22,7 @@ from sqlalchemy import delete
 
 from backend.db import SessionLocal
 from backend.main import app
-from backend.models import Observation, SignalBatch, Study
+from backend.models import Account, Observation, SignalBatch, Study
 
 
 def xlsx_bytes(rows: list[list[str]]) -> bytes:
@@ -64,6 +64,11 @@ class WorkflowTests(unittest.TestCase):
     def setUpClass(cls):
         cls.client_context = TestClient(app)
         cls.client = cls.client_context.__enter__()
+        response = cls.client.post("/api/v1/auth/signup", json={"email": "workflow@example.com", "password": "workflow test password 42"})
+        if response.status_code == 409:
+            response = cls.client.post("/api/v1/auth/login", json={"email": "workflow@example.com", "password": "workflow test password 42"})
+        if response.status_code not in (200, 201):
+            raise RuntimeError(f"Could not initialize workflow test account: {response.text}")
 
     @classmethod
     def tearDownClass(cls):
@@ -80,6 +85,40 @@ class WorkflowTests(unittest.TestCase):
             session.execute(delete(Study))
             session.execute(delete(SignalBatch))
             session.commit()
+        response = self.client.post("/api/v1/auth/login", json={"email": "workflow@example.com", "password": "workflow test password 42"})
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_account_sessions_and_private_studies_and_datasets(self):
+        self.assertEqual(self.client.get("/api/v1/auth/me").json()["authenticated"], True)
+        created = self.client.post("/api/v1/studies", json={"name": "Private cafe", "city": "Bengaluru", "business_type": "Cafe"})
+        self.assertEqual(created.status_code, 201, created.text)
+        imported = self.upload("private.csv", b"city,area,value\nBengaluru,Indiranagar,5\n")
+        self.assertEqual(imported.status_code, 201, imported.text)
+
+        other = TestClient(app)
+        signup = other.post("/api/v1/auth/signup", json={"email": "other@example.com", "password": "another account password 123"})
+        self.assertEqual(signup.status_code, 201, signup.text)
+        self.assertEqual(other.get("/api/v1/studies").json()["studies"], [])
+        self.assertEqual(other.get("/api/v1/data-sources").json()["uploaded_sources"], [])
+        self.assertEqual(other.get("/api/v1/coverage", params={"city": "Bengaluru"}).json()["items"][1]["record_count"], 0)
+        self.assertEqual(other.get(f"/api/v1/studies/{created.json()['id']}").status_code, 404)
+        self.assertEqual(other.delete(f"/api/v1/data-sources/{imported.json()['id']}").status_code, 404)
+        other.post("/api/v1/auth/logout")
+        other.close()
+
+        self.assertEqual(self.client.get("/api/v1/studies").json()["studies"][0]["id"], created.json()["id"])
+        self.assertEqual(self.client.get("/api/v1/data-sources").json()["uploaded_sources"][0]["id"], imported.json()["id"])
+
+    def test_anonymous_users_cannot_scan_or_import(self):
+        anonymous = TestClient(app)
+        self.assertFalse(anonymous.get("/api/v1/auth/me").json()["authenticated"])
+        preview = anonymous.post("/api/v1/datasets/preview", data={"category": "footfall"}, files={"file": ("data.csv", b"city,value\nBengaluru,2\n")})
+        self.assertEqual(preview.status_code, 401)
+        study = anonymous.post("/api/v1/studies", json={"name": "Guest", "city": "Mumbai", "business_type": "Cafe"})
+        self.assertEqual(study.status_code, 401)
+        login = anonymous.post("/api/v1/auth/login", json={"email": "workflow@example.com", "password": "incorrect password 123"})
+        self.assertEqual(login.status_code, 401)
+        anonymous.close()
 
     def test_market_sources_import_formats_and_city_filtered_competition(self):
         self.assertEqual(self.client.get("/api/v1/health").status_code, 200)

@@ -30,6 +30,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, help="HDFS output directory for cleaned Parquet observations")
     parser.add_argument("--keyspace", default="spotwise")
     parser.add_argument("--table", default="area_signal_summary")
+    parser.add_argument("--mongo-uri", default="", help="Optional MongoDB URI; when set, land source rows as documents and reread them before cleaning")
+    parser.add_argument("--mongo-database", default="spotwise")
+    parser.add_argument("--mongo-collection", default="")
     return parser.parse_args()
 
 
@@ -40,6 +43,20 @@ def main() -> None:
     try:
         reader = spark.read.option("header", True).option("mode", "PERMISSIVE")
         source = reader.csv(args.input) if args.format == "csv" else spark.read.parquet(args.input)
+        if args.mongo_uri:
+            if not args.mongo_collection:
+                raise ValueError("--mongo-collection is required when --mongo-uri is enabled")
+            (source.write.format("mongodb")
+             .mode("overwrite")
+             .option("connection.uri", args.mongo_uri)
+             .option("database", args.mongo_database)
+             .option("collection", args.mongo_collection)
+             .save())
+            source = (spark.read.format("mongodb")
+                      .option("connection.uri", args.mongo_uri)
+                      .option("database", args.mongo_database)
+                      .option("collection", args.mongo_collection)
+                      .load())
         columns = {name.casefold(): name for name in source.columns}
         if "city" not in columns or "value" not in columns:
             raise ValueError("Input must include required columns: city and value")

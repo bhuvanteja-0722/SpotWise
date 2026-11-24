@@ -1,6 +1,6 @@
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
-  const state = { analysis: null, studies: [], dashboard: null, sources: null, areas: [] };
+  const state = { analysis: null, studies: [], dashboard: null, sources: null, areas: [], account: null };
   const bootStartedAt = performance.now();
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const number = (value, digits = 0) => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: digits });
@@ -21,7 +21,9 @@
     if (!response.ok) {
       const detail = payload?.detail;
       const message = typeof detail === 'string' ? detail : detail?.message || JSON.stringify(detail || payload);
-      throw new Error(message || `Request failed (${response.status})`);
+      const error = new Error(message || `Request failed (${response.status})`);
+      error.status = response.status;
+      throw error;
     }
     return payload;
   }
@@ -33,6 +35,83 @@
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => element.classList.remove('show'), 2600);
   }
+
+  const accountDialog = $('#accountDialog');
+  const guideDialog = $('#guideDialog');
+  let accountMode = 'signup';
+  function openAccountDialog(mode = 'signup') {
+    setAccountMode(mode);
+    $('#accountMessage').textContent = '';
+    accountDialog.showModal();
+  }
+  function setAccountMode(mode) {
+    accountMode = mode;
+    document.querySelectorAll('.account-switch button').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
+    $('#accountTitle').textContent = mode === 'signup' ? 'Create your account' : 'Welcome back';
+    $('#accountSubmit').textContent = mode === 'signup' ? 'Create account' : 'Sign in';
+    $('#accountForm').elements.password.autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
+    $('#accountFormFields').hidden = Boolean(state.account);
+    $('#accountSignedActions').hidden = !state.account;
+    $('#accountSignedIn').hidden = !state.account;
+    $('#accountSignedIn').innerHTML = state.account ? `<div class="account-welcome"><span class="avatar">${escapeHtml(state.account.email.slice(0, 2).toUpperCase())}</span><span><b>Signed in</b><small>${escapeHtml(state.account.email)}</small></span></div><p>Your saved studies and imported datasets are tied to this account.</p>` : '';
+  }
+  function renderAccount() {
+    const label = state.account ? state.account.email.split('@')[0].slice(0, 14) : 'Account';
+    $('#accountLabel').textContent = label;
+    $('#accountAvatar').textContent = state.account ? state.account.email.slice(0, 2).toUpperCase() : 'SW';
+    $('#accountButton').classList.toggle('is-signed-in', Boolean(state.account));
+    setAccountMode(accountMode);
+  }
+  async function loadAccount() {
+    const result = await api('/api/v1/auth/me');
+    state.account = result.account;
+    renderAccount();
+  }
+  async function refreshAccountData() {
+    await refreshMarkets();
+    await Promise.all([refreshAreas(), refreshDashboard(), refreshStudies(), refreshSources(), refreshCoverage()]);
+  }
+  function requireAccount(action) {
+    if (state.account) return true;
+    toast(`Sign in to ${action}`);
+    openAccountDialog('signup');
+    return false;
+  }
+  $('#accountButton').addEventListener('click', () => openAccountDialog(state.account ? accountMode : 'signup'));
+  $('#closeAccountDialog').addEventListener('click', () => accountDialog.close());
+  document.querySelectorAll('.account-switch button').forEach((button) => button.addEventListener('click', () => setAccountMode(button.dataset.mode)));
+  $('#accountForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = $('#accountSubmit');
+    submit.disabled = true;
+    $('#accountMessage').textContent = accountMode === 'signup' ? 'Creating your account…' : 'Signing in…';
+    try {
+      const result = await api(`/api/v1/auth/${accountMode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.elements.email.value, password: form.elements.password.value }) });
+      state.account = result.account;
+      renderAccount();
+      accountDialog.close();
+      await refreshAccountData();
+      toast(accountMode === 'signup' ? 'Account created. Your workspace is ready.' : 'Signed in. Your workspace is ready.');
+    } catch (error) { $('#accountMessage').textContent = error.message; }
+    finally { submit.disabled = false; }
+  });
+  $('#logoutButton').addEventListener('click', async () => {
+    try {
+      await api('/api/v1/auth/logout', { method: 'POST' });
+      state.account = null;
+      state.studies = [];
+      state.sources = null;
+      renderAccount();
+      accountDialog.close();
+      await refreshAccountData();
+      toast('Signed out');
+    } catch (error) { toast(error.message); }
+  });
+  document.querySelectorAll('.guide-open').forEach((button) => button.addEventListener('click', () => guideDialog.showModal()));
+  $('#closeGuideDialog').addEventListener('click', () => { guideDialog.close(); localStorage.setItem('spotwise-guide-seen', '1'); });
+  $('#closeGuideDone').addEventListener('click', () => { guideDialog.close(); localStorage.setItem('spotwise-guide-seen', '1'); });
+  $('#guideAccountButton').addEventListener('click', () => { guideDialog.close(); openAccountDialog('signup'); });
 
   async function finishBootScreen() {
     const screen = $('#bootScreen');
@@ -66,6 +145,7 @@
 
   async function start() {
     try {
+      await loadAccount();
       await refreshMarkets();
       setApiStatus(true, 'Connected to FastAPI and the SpotWise database');
       updateSelectionSummary();
@@ -113,6 +193,7 @@
       await Promise.all([refreshAreas(), refreshDashboard(), refreshStudies(), refreshSources(), refreshCoverage()]);
       initialiseScenario();
       updateScenario();
+      if (!localStorage.getItem('spotwise-guide-seen')) guideDialog.showModal();
     } catch (error) {
       setApiStatus(false, error.message);
       $('#rentalRecords').textContent = 'Backend offline';
@@ -543,6 +624,7 @@
 
   const studyDialog = $('#studyDialog');
   const openStudyDialog = () => {
+    if (!requireAccount('save a study')) return;
     const form = $('#studyForm');
     form.reset();
     window.activeStudyId = null;
@@ -558,6 +640,7 @@
 
   $('#studyForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!requireAccount('save a study')) return;
     const form = event.currentTarget;
     const formData = new FormData(form);
     const assumptions = {};
@@ -647,6 +730,13 @@
     uploadReady = false;
     importButton.disabled = true;
     if (!file) { preview.hidden = true; message.textContent = ''; importButton.textContent = 'Choose a file to scan ↥'; return; }
+    if (!requireAccount('scan and import local datasets')) {
+      importForm.elements.file.value = '';
+      preview.hidden = false;
+      preview.textContent = 'Create an account or sign in before scanning a private dataset.';
+      message.textContent = '';
+      return;
+    }
     preview.hidden = false;
     preview.textContent = `Scanning ${file.name} · ${Math.max(1, Math.ceil(file.size / 1024))} KB…`;
     message.textContent = 'The server is checking file structure, required fields, values, dates, coordinates, duplicates, and row limits.';
@@ -697,6 +787,7 @@
 
   importForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!requireAccount('import a local dataset')) return;
     if (!uploadReady) { toast('Scan a valid data file before importing'); return; }
     const formElement = event.currentTarget;
     const message = $('#importMessage');

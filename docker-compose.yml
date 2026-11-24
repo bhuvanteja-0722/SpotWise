@@ -68,6 +68,22 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # Raw, schema-flexible document landing zone for the optional Spark ETL.
+  # This development service is private to the Compose network and has no auth.
+  mongodb:
+    image: mongo:8.0
+    profiles: [bigdata]
+    hostname: mongodb
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+    restart: unless-stopped
+
   spark-master:
     image: apache/spark:3.5.7-scala2.12-java17-python3-ubuntu
     profiles: [bigdata]
@@ -105,6 +121,7 @@ services:
     depends_on:
       - spark-worker
       - cassandra
+      - mongodb
       - hdfs-namenode
     volumes:
       - ./bigdata:/opt/spotwise/bigdata:ro
@@ -113,3 +130,4 @@ volumes:
   hdfs-name:
   hdfs-data:
   cassandra-data:
+  mongodb-data:

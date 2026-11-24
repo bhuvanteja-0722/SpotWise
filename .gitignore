@@ -8,3 +8,5 @@ data/*.db
 data/*.db-*
 __pycache__/
 .venv/
+
+.playwright-mcp/

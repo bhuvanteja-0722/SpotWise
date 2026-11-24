@@ -31,7 +31,19 @@ output_dir="/spotwise/curated/${run_id}"
 input_name="$(basename "$input_file")"
 input_parent="$(dirname "$input_file")"
 
-docker compose --profile bigdata up -d spotwise hdfs-namenode hdfs-datanode cassandra spark-master spark-worker
+docker compose --profile bigdata up -d spotwise hdfs-namenode hdfs-datanode mongodb cassandra spark-master spark-worker
+
+mongo_collection="raw_${run_id//-/_}"
+for attempt in $(seq 1 30); do
+  if docker compose --profile bigdata exec -T mongodb mongosh --quiet --eval 'db.adminCommand("ping").ok' 2>/dev/null | grep -q 1; then
+    break
+  fi
+  if [[ "$attempt" -eq 30 ]]; then
+    echo "MongoDB did not become ready. Check: docker compose --profile bigdata logs mongodb" >&2
+    exit 1
+  fi
+  sleep 2
+done
 
 for attempt in $(seq 1 60); do
   if docker compose --profile bigdata exec -T cassandra cqlsh 127.0.0.1 -e 'DESCRIBE CLUSTER' >/dev/null 2>&1; then
@@ -54,7 +66,7 @@ docker compose --profile bigdata run --rm \
 docker compose --profile bigdata run --rm spark-submit \
   --master spark://spark-master:7077 \
   --deploy-mode client \
-  --packages com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 \
+  --packages com.datastax.spark:spark-cassandra-connector_2.12:3.5.1,org.mongodb.spark:mongo-spark-connector_2.12:10.7.0 \
   --conf spark.driver.host=spark-submit \
   --conf spark.driver.bindAddress=0.0.0.0 \
   --conf spark.driver.port=7080 \
@@ -63,11 +75,16 @@ docker compose --profile bigdata run --rm spark-submit \
   --conf spark.hadoop.fs.defaultFS=hdfs://namenode:9000 \
   --conf spark.hadoop.dfs.replication=1 \
   --conf spark.cassandra.connection.host=cassandra \
+  --conf spark.mongodb.write.connection.uri="mongodb://mongodb:27017/spotwise?retryWrites=true" \
+  --conf spark.mongodb.read.connection.uri="mongodb://mongodb:27017/spotwise?retryWrites=true" \
   /opt/spotwise/spark_etl.py \
   --input "hdfs://namenode:9000${input_dir}" \
   --format "$input_format" \
   --category "$category" \
   --metric "$metric" \
-  --output "hdfs://namenode:9000${output_dir}"
+  --output "hdfs://namenode:9000${output_dir}" \
+  --mongo-uri "mongodb://mongodb:27017/spotwise?retryWrites=true" \
+  --mongo-database spotwise \
+  --mongo-collection "$mongo_collection"
 
-echo "Pipeline complete. HDFS output: ${output_dir}; Cassandra table: spotwise.area_signal_summary"
+echo "Pipeline complete. HDFS curated: ${output_dir}; Mongo raw: spotwise.${mongo_collection}; Cassandra summaries: spotwise.area_signal_summary"

@@ -62,6 +62,11 @@ class StudyComparison(BaseModel):
     study_ids: list[int] = Field(min_length=2, max_length=4)
 
 
+class AccountCredentials(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=12, max_length=256)
+
+
 class DatasetImportResult(BaseModel):
     id: int
     name: str
